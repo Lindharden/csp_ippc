@@ -3,7 +3,6 @@ project('csp_pipeline_config', 'c')
 csp_dep = dependency('csp', fallback : ['csp', 'csp_dep'])
 
 csp_pipeline_src = files([
-	'src/pipeline_server.c',
 ])
 
 csp_pipeline_config_inc = include_directories('include')
