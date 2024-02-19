@@ -39,7 +39,7 @@ void pipeline_server_loop(void * param) {
 
 		/* Handle RDP service differently */
 		if (csp_conn_dport(conn) == PIPELINE_PORT_SERVER) {
-            bool should_continue = true;
+            int should_continue = true;
             do {
                 should_continue = pipeline_server_handler(conn);
             } while (should_continue == true);
@@ -54,7 +54,7 @@ void pipeline_server_loop(void * param) {
 	}
 }
 
-bool pipeline_server_handler(csp_conn_t * conn)
+int pipeline_server_handler(csp_conn_t * conn)
 {
 	// // Read request
 	// csp_packet_t * packet = csp_read(conn, PIPELINE_SERVER_TIMEOUT);
