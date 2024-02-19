@@ -11,15 +11,17 @@
 #include <param/param.h>
 #include <param/param_list.h>
 
+#include "include/csp_pipeline_config/pipeline_slash.h"
+
 static int slash_csp_configure_pipeline(struct slash *slash)
 {
     unsigned int node = slash_dfl_node;
-    unsigned int timeout = slash_dfl_timeout;
+    unsigned int timeout = PIPELINE_CONFIG_TIMEOUT;
 
     optparse_t * parser = optparse_new("pipeline_conf", "<config-file>");
     optparse_add_help(parser);
     optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = <env>)");
-    optparse_add_unsigned(parser, 't', "timout", "NUM", 0, &timeout, "timout for connection (default = slash_dfl_timeout)");
+    optparse_add_unsigned(parser, 't', "timout", "NUM", 0, &timeout, "timout for connection (default = PIPELINE_CONFIG_TIMEOUT)");
 
     int argi = optparse_parse(parser, slash->argc - 1, (const char **) slash->argv + 1);
     if (argi < 0) {
@@ -71,7 +73,7 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 		if (server > 0)
 			dest = server;
 
-		if (param_pull_single(param, offset, 1, dest, slash_dfl_timeout, 2) < 0) {
+		if (param_pull_single(param, offset, 1, dest, PIPELINE_CONFIG_TIMEOUT, 2) < 0) {
 			printf("No response\n");
 			return SLASH_EIO;
 		}
