@@ -1,4 +1,0 @@
-#include <csp/csp.h>
-
-#define PIPELINE_SERVER_TIMEOUT 10000
-#define PIPELINE_PORT_SERVER 69

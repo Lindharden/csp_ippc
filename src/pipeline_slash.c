@@ -8,18 +8,18 @@
 #include <slash/slash.h>
 #include <slash/optparse.h>
 #include <slash/dflopt.h>
-
-#include <csp_pipeline_config/pipeline_server.h>
+#include <param/param.h>
+#include <param/param_list.h>
 
 static int slash_csp_configure_pipeline(struct slash *slash)
 {
     unsigned int node = slash_dfl_node;
-    unsigned int timeout = PIPELINE_SERVER_TIMEOUT;
+    unsigned int timeout = slash_dfl_timeout;
 
     optparse_t * parser = optparse_new("pipeline_conf", "<config-file>");
     optparse_add_help(parser);
     optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = <env>)");
-    optparse_add_unsigned(parser, 't', "timout", "NUM", 0, &timeout, "timout for connection (default = PIPELINE_SERVER_TIMEOUT)");
+    optparse_add_unsigned(parser, 't', "timout", "NUM", 0, &timeout, "timout for connection (default = slash_dfl_timeout)");
 
     int argi = optparse_parse(parser, slash->argc - 1, (const char **) slash->argv + 1);
     if (argi < 0) {
@@ -41,6 +41,41 @@ static int slash_csp_configure_pipeline(struct slash *slash)
     }
 
     printf("Client: Configuring pipeline using %s\n", config_filename);
+    
+    char * name = "pipeline_run";
+	int offset = -1;
+	param_t * param = NULL;
+
+	/* Go through the list of parameters */
+	param_list_iterator i = {};
+	while ((param = param_list_iterate(&i)) != NULL) {
+
+		/* Name match (with wildcard) */
+		if (strmatch(param->name, name, strlen(param->name), strlen(name)) == 0) {
+			continue;
+		}
+
+		/* Node match */
+		if (param->node != node) {
+			continue;
+		}
+
+		/* Local parameters are printed directly */
+		if ((param->node == 0) && (server == 0)) {
+			param_print(param, -1, NULL, 0, 0);
+			continue;
+		}
+
+		/* Select destination, host overrides parameter node */
+		int dest = node;
+		if (server > 0)
+			dest = server;
+
+		if (param_pull_single(param, offset, 1, dest, slash_dfl_timeout, 2) < 0) {
+			printf("No response\n");
+			return SLASH_EIO;
+		}
+    }
 
     return SLASH_SUCCESS;
 }
