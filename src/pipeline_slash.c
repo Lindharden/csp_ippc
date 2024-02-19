@@ -15,13 +15,8 @@
 
 static int slash_csp_configure_pipeline(struct slash *slash)
 {
-    unsigned int node = slash_dfl_node;
-    unsigned int timeout = PIPELINE_CONFIG_TIMEOUT;
-
     optparse_t * parser = optparse_new("pipeline_conf", "<config-file>");
     optparse_add_help(parser);
-    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = <env>)");
-    optparse_add_unsigned(parser, 't', "timout", "NUM", 0, &timeout, "timout for connection (default = PIPELINE_CONFIG_TIMEOUT)");
 
     int argi = optparse_parse(parser, slash->argc - 1, (const char **) slash->argv + 1);
     if (argi < 0) {
@@ -44,32 +39,39 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 
     printf("Client: Configuring pipeline using %s\n", config_filename);
     
-    char * name = "pipeline_run";
+    return configure_pipeline();
+}
+
+int configure_pipeline()
+{
+	char * name = "pipeline_run";
+	int node = 162;
 	int offset = -1;
-	param_t * param = NULL;
+	param_t * param = param_list_find_name(node, name);
 
-	/* Go through the list of parameters */
-	param_list_iterator i = {};
-	while ((param = param_list_iterate(&i)) != NULL) {
+	if (param == NULL) {
+		printf("%s not found\n", name);
+		return SLASH_EINVAL;
+	}
 
-		/* Name match (with wildcard) */
-		if (strmatch(param->name, name, strlen(param->name), strlen(name)) == 0) {
-			continue;
-		}
+	/* Check if Value is present */
+	if (++argi >= slash->argc) {
+		printf("missing parameter value\n");
+		return SLASH_EINVAL;
+	}
+	
+	char valuebuf[128] __attribute__((aligned(16))) = { };
+	param_str_to_value(param->type, "10", valuebuf);
 
-		/* Node match */
-		if (param->node != node) {
-			continue;
-		}
+	/* Select destination, host overrides parameter node */
+	int dest = node;
 
-		/* Select destination, host overrides parameter node */
-		int dest = node;
+	if (param_push_single(param, offset, valuebuf, 1, dest, PIPELINE_CONFIG_TIMEOUT, 2) < 0) {
+		printf("No response\n");
+		return SLASH_EIO;
+	}
 
-		if (param_pull_single(param, offset, 1, dest, PIPELINE_CONFIG_TIMEOUT, 2) < 0) {
-			printf("No response\n");
-			return SLASH_EIO;
-		}
-    }
+	param_print(param, -1, NULL, 0, 2);
 
     return SLASH_SUCCESS;
 }
