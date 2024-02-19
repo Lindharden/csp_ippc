@@ -53,12 +53,6 @@ int configure_pipeline()
 		printf("%s not found\n", name);
 		return SLASH_EINVAL;
 	}
-
-	/* Check if Value is present */
-	if (++argi >= slash->argc) {
-		printf("missing parameter value\n");
-		return SLASH_EINVAL;
-	}
 	
 	char valuebuf[128] __attribute__((aligned(16))) = { };
 	param_str_to_value(param->type, "10", valuebuf);
