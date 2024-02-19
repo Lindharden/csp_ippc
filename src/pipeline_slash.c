@@ -62,16 +62,8 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 			continue;
 		}
 
-		/* Local parameters are printed directly */
-		if ((param->node == 0) && (server == 0)) {
-			param_print(param, -1, NULL, 0, 0);
-			continue;
-		}
-
 		/* Select destination, host overrides parameter node */
 		int dest = node;
-		if (server > 0)
-			dest = server;
 
 		if (param_pull_single(param, offset, 1, dest, PIPELINE_CONFIG_TIMEOUT, 2) < 0) {
 			printf("No response\n");
