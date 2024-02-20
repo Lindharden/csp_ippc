@@ -2,8 +2,10 @@ project('csp_pipeline_config', 'c')
 
 csp_dep = dependency('csp', fallback : ['csp', 'csp_dep'])
 param_dep = dependency('param', fallback : ['param', 'param_dep'])
+proto_c_dep = dependency('libprotobuf-c', fallback: ['protobuf-c', 'proto_c_dep'])
 
 csp_pipeline_src = files([
+	'src/pipeline_config.pb-c.c',
 ])
 
 csp_pipeline_config_inc = include_directories('include')
@@ -21,7 +23,7 @@ endif
 csp_pipeline_config_lib = static_library('csp_pipeline_config',
 	sources: [csp_pipeline_src],
 	include_directories : csp_pipeline_config_inc,
-	dependencies : [csp_dep, slash_dep, param_dep],
+	dependencies : [csp_dep, slash_dep, param_dep, proto_c_dep],
 	install : false
 )
 
