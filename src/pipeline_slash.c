@@ -39,13 +39,8 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 
     printf("Client: Configuring pipeline using %s\n", config_filename);
     
-    return configure_pipeline();
-}
-
-int configure_pipeline()
-{
-	char * name = "pipeline_run";
-	int node = 162;
+    char * name = "pipeline_config";
+	int node = PIPELINE_CSP_NODE_ID;
 	int offset = -1;
 	param_t * param = param_list_find_name(node, name);
 
