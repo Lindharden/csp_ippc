@@ -6,7 +6,7 @@
 #define PROTOBUF_C__NO_DEPRECATED
 #endif
 
-#include "pipeline_config.pb-c.h"
+#include "include/csp_pipeline_config/pipeline_config.pb-c.h"
 void   module_definition__init
                      (ModuleDefinition         *message)
 {

@@ -6,6 +6,7 @@ proto_c_dep = dependency('libprotobuf-c', fallback: ['protobuf-c', 'proto_c_dep'
 
 csp_pipeline_src = files([
 	'src/pipeline_config.pb-c.c',
+	'src/module_config.pb-c.c',
 ])
 
 csp_pipeline_config_inc = include_directories('include')
