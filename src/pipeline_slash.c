@@ -1,9 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <csp/csp.h>
-#include <csp/csp_cmp.h>
-#include <csp_autoconfig.h>
-#include <csp/csp_hooks.h>
 #include <sys/types.h>
 #include <slash/slash.h>
 #include <slash/optparse.h>
@@ -138,8 +134,9 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 
 	// Pack PipelineDefinition
 	size_t len_pipeline = pipeline_definition__get_packed_size(&pipeline);
-	uint8_t packed_buf[len_pipeline];
+    uint8_t packed_buf[len_pipeline + 1];
 	pipeline_definition__pack(&pipeline, packed_buf);
+	packed_buf[len_pipeline] = '\0'; // indicate end of data
 
 	char *name = "pipeline_config";
 	int offset = -1;
@@ -151,17 +148,14 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 		return SLASH_EINVAL;
 	}
 
-	char valuebuf[128] __attribute__((aligned(16))) = { };
-	param_str_to_value(param->type, packed_buf, valuebuf);
-
 	// Insert packed pipeline definition into parameter
-	if (param_push_single(param, offset, valuebuf, 1, node, PIPELINE_CONFIG_TIMEOUT, 2) < 0)
+	if (param_push_single(param, offset, packed_buf, 1, node, PIPELINE_CONFIG_TIMEOUT, 2, true) < 0)
 	{
 		printf("No response\n");
 		return SLASH_EIO;
 	}
 
-	param_print(param, -1, NULL, 0, 2);
+	param_print(param, -1, NULL, 0, 2, 0);
 
 	return SLASH_SUCCESS;
 }
@@ -288,7 +282,7 @@ static int slash_csp_configure_module(struct slash *slash)
 {
 	char *config_filename;
 	int node = PIPELINE_CSP_NODE_ID;
-	optparse_t *parser = optparse_new("pconf", "<module-idx>");
+	optparse_t *parser = optparse_new("mconf", "<module-idx>");
 	optparse_add_help(parser);
 	optparse_add_int(parser, 'n', "node", "NUM", 0, &node, "node (default = PIPELINE_CSP_NODE_ID)");
 	optparse_add_string(parser, 'f', "file", "STRING", &config_filename, "file (default = pipeline_module<module-idx>_config.yaml)");
@@ -348,7 +342,7 @@ static int slash_csp_configure_module(struct slash *slash)
 		return SLASH_EIO;
 	}
 
-	param_print(param, -1, NULL, 0, 2);
+	param_print(param, -1, NULL, 0, 2, 0);
 
 	return SLASH_SUCCESS;
 }
