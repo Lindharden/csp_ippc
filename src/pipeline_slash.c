@@ -224,71 +224,71 @@ int parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 		}
 		switch (event.type)
 		{
-		case YAML_MAPPING_START_EVENT:
-			// New Dash
-			param_idx++;
-			ConfigParameter *temp = realloc(params, (param_count + 1) * sizeof(ConfigParameter));
-			if (!temp)
-			{
-				fprintf(stderr, "Failed to allocate memory for ConfigParameter during parsing\n");
-				return -1;
-			}
-			params = temp; // Update the array pointer
-
-			// Fill in the new struct
-			ConfigParameter param = CONFIG_PARAMETER__INIT;
-			params[param_idx] = param;
-
-			param_count++; // Increment the number of elements
-			break;
-		case YAML_SCALAR_EVENT:
-			// New set of ModuleDefinition encountered
-			if (strcmp((char *)event.data.scalar.value, "key") == 0)
-			{
-				// Expect the next event to be the value of order
-				if (!yaml_parser_parse(&parser, &event))
-					break;
-				params[param_idx].key = strdup((char *)event.data.scalar.value);
-			}
-			else if (strcmp((char *)event.data.scalar.value, "type") == 0)
-			{
-				// Expect the next event to be the value of name
-				if (!yaml_parser_parse(&parser, &event))
-					break;
-				params[param_idx].value_case = atoi((char *)event.data.scalar.value);
-			}
-			else if (strcmp((char *)event.data.scalar.value, "value") == 0)
-			{
-				// Expect the next event to be the value of param_id
-				if (!yaml_parser_parse(&parser, &event))
-					break;
-				switch (params[param_idx].value_case)
+			case YAML_MAPPING_START_EVENT:
+				// New Dash
+				param_idx++;
+				ConfigParameter *temp = realloc(params, (param_count + 1) * sizeof(ConfigParameter));
+				if (!temp)
 				{
-					case CONFIG_PARAMETER__VALUE_BOOL_VALUE:
-						params[param_idx].bool_value = atoi((char *)event.data.scalar.value);
-						break;
-					case CONFIG_PARAMETER__VALUE_INT_VALUE:
-						params[param_idx].int_value = atoi((char *)event.data.scalar.value);
-						break;
-					case CONFIG_PARAMETER__VALUE_FLOAT_VALUE:
-						params[param_idx].float_value = atof((char *)event.data.scalar.value);
-						break;
-					case CONFIG_PARAMETER__VALUE_STRING_VALUE:
-						params[param_idx].string_value = strdup((char *)event.data.scalar.value);
-						break;
-					default:
-						// TODO: FAIL, unknown type!!!
-						break;
+					fprintf(stderr, "Failed to allocate memory for ConfigParameter during parsing\n");
+					return -1;
 				}
-			}
-			else
-			{
-				// Unexpected event type
-				fprintf(stderr, "Unexpected YAML scalar value format: %c.\n", event.data.scalar.value);
-				return -1;
-			}
-		default:
-			break;
+				params = temp; // Update the array pointer
+
+				// Fill in the new struct
+				ConfigParameter param = CONFIG_PARAMETER__INIT;
+				params[param_idx] = param;
+
+				param_count++; // Increment the number of elements
+				break;
+			case YAML_SCALAR_EVENT:
+				// New set of ModuleDefinition encountered
+				if (strcmp((char *)event.data.scalar.value, "key") == 0)
+				{
+					// Expect the next event to be the value of order
+					if (!yaml_parser_parse(&parser, &event))
+						break;
+					params[param_idx].key = strdup((char *)event.data.scalar.value);
+				}
+				else if (strcmp((char *)event.data.scalar.value, "type") == 0)
+				{
+					// Expect the next event to be the value of name
+					if (!yaml_parser_parse(&parser, &event))
+						break;
+					params[param_idx].value_case = atoi((char *)event.data.scalar.value);
+				}
+				else if (strcmp((char *)event.data.scalar.value, "value") == 0)
+				{
+					// Expect the next event to be the value of param_id
+					if (!yaml_parser_parse(&parser, &event))
+						break;
+					switch (params[param_idx].value_case)
+					{
+						case CONFIG_PARAMETER__VALUE_BOOL_VALUE:
+							params[param_idx].bool_value = atoi((char *)event.data.scalar.value);
+							break;
+						case CONFIG_PARAMETER__VALUE_INT_VALUE:
+							params[param_idx].int_value = atoi((char *)event.data.scalar.value);
+							break;
+						case CONFIG_PARAMETER__VALUE_FLOAT_VALUE:
+							params[param_idx].float_value = atof((char *)event.data.scalar.value);
+							break;
+						case CONFIG_PARAMETER__VALUE_STRING_VALUE:
+							params[param_idx].string_value = strdup((char *)event.data.scalar.value);
+							break;
+						default:
+							// TODO: FAIL, unknown type!!!
+							break;
+					}
+				}
+				else
+				{
+					// Unexpected event type
+					fprintf(stderr, "Unexpected YAML scalar value format: %c.\n", event.data.scalar.value);
+					return -1;
+				}
+			default:
+				break;
 		}
 		if (event.type == YAML_SEQUENCE_END_EVENT)
 			break;
