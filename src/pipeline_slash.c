@@ -7,6 +7,8 @@
 #include <param/param.h>
 #include <param/param_list.h>
 #include <yaml.h>
+#include <errno.h>
+#include <math.h>
 
 #include "include/csp_pipeline_config/pipeline_slash.h"
 #include "include/csp_pipeline_config/pipeline_config.pb-c.h"
@@ -19,12 +21,12 @@ int initialize_parser(const char *filename, yaml_parser_t *parser, FILE *fh)
 	/* Initialize parser */
 	if (!yaml_parser_initialize(parser))
 	{
-		fputs("Failed to initialize parser!\n", stderr);
+		fprintf(stderr, "Error: Failed to initialize parser!\n");
 		return -1;
 	}
 	if (fh == NULL)
 	{
-		fputs("Failed to open file!\n", stderr);
+		fprintf(stderr, "Error: Failed to open file!\n");
 		return -1;
 	}
 
@@ -48,6 +50,64 @@ void cleanup_resources(yaml_parser_t *parser, yaml_event_t *event, FILE *fh)
 	}
 }
 
+int safe_atof(const char *in, float *out)
+{
+	errno = 0; // To detect overflow or underflow
+	char *endptr;
+	float val = strtof(in, &endptr);
+
+	if (endptr == in)
+	{
+		fprintf(stderr, "Error: Value \"%s\" could not be parsed to a floating-point number.\n", in);
+		return -1;
+	}
+	else if (*endptr != '\0')
+	{
+		fprintf(stderr, "Error: Extra characters after number: \"%s\"\n", endptr);
+		return -1;
+	}
+	else if ((val == HUGE_VALF || val == -HUGE_VALF) && errno == ERANGE)
+	{
+		// Note: Checking against HUGE_VALF for float-specific overflow/underflow
+		fprintf(stderr, "Error: Value \"%s\" is out of range.\n", in);
+		return -1;
+	}
+
+	*out = val;
+	return 0;
+}
+
+int safe_atoi(const char *in, int *out)
+{
+	errno = 0; // To detect overflow
+	char *endptr;
+	long val = strtol(in, &endptr, 10); // Base 10 for decimal conversion
+
+	if (endptr == in)
+	{
+		fprintf(stderr, "Error: No digits were found in token %s\n", in);
+		return -1;
+	}
+	if (*endptr != '\0')
+	{
+		fprintf(stderr, "Error: Extra characters after number: %s in token %s\n", endptr, in);
+		return -1;
+	}
+	if ((val == LONG_MIN || val == LONG_MAX) && errno == ERANGE)
+	{
+		fprintf(stderr, "Error: Value out of long int range for token %s\n", in);
+		return -1;
+	}
+	if (val < INT_MIN || val > INT_MAX)
+	{
+		fprintf(stderr, "Error: Value out of int range for token %s\n", in);
+		return -1;
+	}
+
+	*out = (int)val;
+	return 0;
+}
+
 int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 {
 	yaml_parser_t parser;
@@ -66,7 +126,7 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 	{
 		if (!yaml_parser_parse(&parser, &event))
 		{
-			printf("Parser error %d\n", parser.error);
+			printf("Error: Parser error %d\n", parser.error);
 			return -1;
 		}
 		switch (event.type)
@@ -77,17 +137,17 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 				ModuleDefinition *temp = realloc(modules, (module_count + 1) * sizeof(ModuleDefinition));
 				if (!temp)
 				{
-					fprintf(stderr, "Failed to allocate memory for ModuleDefinition during parsing\n");
+					fprintf(stderr, "Error: Failed to allocate memory for ModuleDefinition during parsing\n");
 					return -1;
 				}
 
-				modules = temp; // Update the array pointer
+				modules = temp;
 
 				// Fill in the new struct
 				ModuleDefinition module = MODULE_DEFINITION__INIT;
 				modules[module_idx] = module;
 
-				module_count++; // Increment the number of elements
+				module_count++;
 				break;
 			case YAML_SCALAR_EVENT:
 				// New set of ModuleDefinition encountered
@@ -96,7 +156,10 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 					// Expect the next event to be the value of order
 					if (!yaml_parser_parse(&parser, &event))
 						break;
-					modules[module_idx].order = atoi((char *)event.data.scalar.value);
+					if (safe_atoi((char *)event.data.scalar.value, &modules[module_idx].order) < 0)
+					{
+						return -1;
+					}
 				}
 				else if (strcmp((char *)event.data.scalar.value, "name") == 0)
 				{
@@ -110,18 +173,25 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 					// Expect the next event to be the value of param_id
 					if (!yaml_parser_parse(&parser, &event))
 						break;
-					modules[module_idx].param_id = atoi((char *)event.data.scalar.value);
+					if (safe_atoi((char *)event.data.scalar.value, &modules[module_idx].param_id) < 0)
+					{
+						return -1;
+					}
+					if (modules[module_idx].param_id < 1 || modules[module_idx].param_id > PIPELINE_MAX_MODULES) {
+						fprintf(stderr, "Error: Param_id is invalid. Range is 1-%d\n", PIPELINE_MAX_MODULES);
+						return -1;
+					}
 				}
 				else
 				{
 					// Unexpected event type
-					fprintf(stderr, "Unexpected YAML scalar value format: %c.\n", event.data.scalar.value);
+					fprintf(stderr, "Error: Unexpected YAML scalar value format: %s\nAllowed values are: order, name, param_id\n", (char *)event.data.scalar.value);
 					return -1;
 				}
 			default:
 				break;
 		}
-		if (event.type == YAML_SEQUENCE_END_EVENT)
+		if (event.type == YAML_SEQUENCE_END_EVENT || event.type == YAML_DOCUMENT_END_EVENT)
 			break;
 
 		yaml_event_delete(&event);
@@ -130,9 +200,17 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 	// Insert ModuleDefinitions into PipelineDefinition
 	pipeline->n_modules = module_count;
 	pipeline->modules = malloc(sizeof(ModuleDefinition *) * module_count);
+	int orders[module_count];
 	for (size_t i = 0; i < module_count; i++)
 	{
 		pipeline->modules[i] = &modules[i];
+
+		// Ensure module orders are unique
+		if (modules[i].order > module_count || modules[i].order < 1 || orders[modules[i].order - 1] == 1) {
+			fprintf(stderr, "Error: Order values are out of bounds or not sequential, bad value: %d\n", modules[i].order);
+			return -1;
+		}
+		orders[modules[i].order - 1] = 1;
 	}
 
 	cleanup_resources(&parser, &event, fh);
@@ -174,8 +252,8 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 	// Pack PipelineDefinition
 	size_t len_pipeline = pipeline_definition__get_packed_size(&pipeline);
 	uint8_t packed_buf[len_pipeline + 1];
-	pipeline_definition__pack(&pipeline, packed_buf);
-	packed_buf[len_pipeline] = '\0'; // indicate end of data
+	pipeline_definition__pack(&pipeline, &packed_buf[1]); // Insert after first index
+	packed_buf[0] = len_pipeline; // Insert data length in first index
 
 	char *name = "pipeline_config";
 	int offset = -1;
@@ -219,7 +297,7 @@ int parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 	{
 		if (!yaml_parser_parse(&parser, &event))
 		{
-			printf("Parser error %d\n", parser.error);
+			printf("Error: Parser error %d\n", parser.error);
 			return -1;
 		}
 		switch (event.type)
@@ -230,16 +308,16 @@ int parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 				ConfigParameter *temp = realloc(params, (param_count + 1) * sizeof(ConfigParameter));
 				if (!temp)
 				{
-					fprintf(stderr, "Failed to allocate memory for ConfigParameter during parsing\n");
+					fprintf(stderr, "Error: Failed to allocate memory for ConfigParameter during parsing\n");
 					return -1;
 				}
-				params = temp; // Update the array pointer
+				params = temp;
 
 				// Fill in the new struct
 				ConfigParameter param = CONFIG_PARAMETER__INIT;
 				params[param_idx] = param;
 
-				param_count++; // Increment the number of elements
+				param_count++;
 				break;
 			case YAML_SCALAR_EVENT:
 				// New set of ModuleDefinition encountered
@@ -255,7 +333,10 @@ int parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 					// Expect the next event to be the value of name
 					if (!yaml_parser_parse(&parser, &event))
 						break;
-					params[param_idx].value_case = atoi((char *)event.data.scalar.value);
+					if (safe_atoi((char *)event.data.scalar.value, &params[param_idx].value_case) < 0)
+					{
+						return -1;
+					}
 				}
 				else if (strcmp((char *)event.data.scalar.value, "value") == 0)
 				{
@@ -265,32 +346,50 @@ int parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 					switch (params[param_idx].value_case)
 					{
 						case CONFIG_PARAMETER__VALUE_BOOL_VALUE:
-							params[param_idx].bool_value = atoi((char *)event.data.scalar.value);
+							if (strcmp((char *)event.data.scalar.value, "true") == 0)
+							{
+								params[param_idx].bool_value = 1;
+							}
+							else if (strcmp((char *)event.data.scalar.value, "false") == 0)
+							{
+								params[param_idx].bool_value = 0;
+							}
+							else
+							{
+								fprintf(stderr, "Error: Could not parse %s to boolean value\nAllowed values are: true, false\n", (char *)event.data.scalar.value);
+								return -1;
+							}
 							break;
 						case CONFIG_PARAMETER__VALUE_INT_VALUE:
-							params[param_idx].int_value = atoi((char *)event.data.scalar.value);
+							if (safe_atoi((char *)event.data.scalar.value, &params[param_idx].int_value) < 0)
+							{
+								return -1;
+							}
 							break;
 						case CONFIG_PARAMETER__VALUE_FLOAT_VALUE:
-							params[param_idx].float_value = atof((char *)event.data.scalar.value);
+							if (safe_atof((char *)event.data.scalar.value, &params[param_idx].float_value) < 0)
+							{
+								return -1;
+							}
 							break;
 						case CONFIG_PARAMETER__VALUE_STRING_VALUE:
 							params[param_idx].string_value = strdup((char *)event.data.scalar.value);
 							break;
 						default:
-							// TODO: FAIL, unknown type!!!
-							break;
+							fprintf(stderr, "Error: Value case %d unknown.\n", params[param_idx].value_case);
+							return -1;
 					}
 				}
 				else
 				{
 					// Unexpected event type
-					fprintf(stderr, "Unexpected YAML scalar value format: %c.\n", event.data.scalar.value);
+					printf("Error: Unexpected YAML scalar value format: %s\nAllowed values are: key, type, value\n", (char *)event.data.scalar.value);
 					return -1;
 				}
 			default:
 				break;
 		}
-		if (event.type == YAML_SEQUENCE_END_EVENT)
+		if (event.type == YAML_SEQUENCE_END_EVENT || event.type == YAML_DOCUMENT_END_EVENT)
 			break;
 
 		yaml_event_delete(&event);
@@ -326,7 +425,7 @@ static int slash_csp_configure_module(struct slash *slash)
 	/* Check if module id is present */
 	if (++argi >= slash->argc)
 	{
-		printf("missing module id\n");
+		printf("Missing module id\n");
 		return SLASH_EINVAL;
 	}
 
@@ -341,7 +440,7 @@ static int slash_csp_configure_module(struct slash *slash)
 	/* Check if config file is present */
 	if (++argi >= slash->argc)
 	{
-		printf("missing config-file path\n");
+		printf("Missing config-file path\n");
 		return SLASH_EINVAL;
 	}
 
@@ -358,8 +457,8 @@ static int slash_csp_configure_module(struct slash *slash)
 	// Pack PipelineDefinition
 	size_t len_pipeline = module_config__get_packed_size(&module_config);
 	uint8_t packed_buf[len_pipeline + 1];
-	module_config__pack(&module_config, packed_buf);
-	packed_buf[len_pipeline] = '\0'; // indicate end of data
+	module_config__pack(&module_config, &packed_buf[1]); // Insert after first index
+	packed_buf[0] = len_pipeline; // Insert data length in first index
 
 	char *name[20];
 	sprintf(name, "module_param_%d", module_id);
