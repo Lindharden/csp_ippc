@@ -12,33 +12,48 @@
 #include "include/csp_pipeline_config/pipeline_config.pb-c.h"
 #include "include/csp_pipeline_config/module_config.pb-c.h"
 
-FILE *initialize_parser(const char *filename, yaml_parser_t *parser)
+int initialize_parser(const char *filename, yaml_parser_t *parser, FILE *fh)
 {
-	FILE *fh = fopen(filename, "r");
+	fh = fopen(filename, "r");
 
 	/* Initialize parser */
 	if (!yaml_parser_initialize(parser))
+	{
 		fputs("Failed to initialize parser!\n", stderr);
+		return -1;
+	}
 	if (fh == NULL)
+	{
 		fputs("Failed to open file!\n", stderr);
+		return -1;
+	}
 
 	/* Set input file */
 	yaml_parser_set_input_file(parser, fh);
 
-	return fh;
+	return 0;
 }
 
 void cleanup_resources(yaml_parser_t *parser, yaml_event_t *event, FILE *fh)
 {
-	yaml_event_delete(event);
+	if (event != NULL)
+	{
+		yaml_event_delete(event);
+	}
 	yaml_parser_delete(parser);
-	fclose(fh);
+
+	if (fh != NULL)
+	{
+		fclose(fh);
+	}
 }
 
-void parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
+int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 {
 	yaml_parser_t parser;
-	FILE *fh = initialize_parser(filename, &parser);
+	FILE *fh = NULL;
+	if (initialize_parser(filename, &parser, fh) < 0)
+		return -1;
 
 	/* Module definitions */
 	ModuleDefinition *modules = NULL;
@@ -52,7 +67,7 @@ void parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline
 		if (!yaml_parser_parse(&parser, &event))
 		{
 			printf("Parser error %d\n", parser.error);
-			exit(EXIT_FAILURE);
+			return -1;
 		}
 		switch (event.type)
 		{
@@ -63,8 +78,9 @@ void parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline
 				if (!temp)
 				{
 					fprintf(stderr, "Failed to allocate memory for ModuleDefinition during parsing\n");
-					exit(EXIT_FAILURE);
+					return -1;
 				}
+
 				modules = temp; // Update the array pointer
 
 				// Fill in the new struct
@@ -100,7 +116,7 @@ void parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline
 				{
 					// Unexpected event type
 					fprintf(stderr, "Unexpected YAML scalar value format: %c.\n", event.data.scalar.value);
-					break;
+					return -1;
 				}
 			default:
 				break;
@@ -120,13 +136,15 @@ void parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline
 	}
 
 	cleanup_resources(&parser, &event, fh);
+
+	return 0;
 }
 
 static int slash_csp_configure_pipeline(struct slash *slash)
 {
 	char *config_filename = "../yaml/ipp/pipeline_config.yaml";
 	unsigned int node = PIPELINE_CSP_NODE_ID;
-	optparse_t *parser = optparse_new("pconf", NULL);
+	optparse_t *parser = optparse_new("pipeline", NULL);
 	optparse_add_help(parser);
 	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = PIPELINE_CSP_NODE_ID)");
 	optparse_add_string(parser, 'f', "file", "STRING", &config_filename, "file (default = pipeline_config.yaml)");
@@ -148,7 +166,10 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 
 	// Define PipelineDefinition and parse yaml file
 	PipelineDefinition pipeline = PIPELINE_DEFINITION__INIT;
-	parse_pipeline_yaml_file(config_filename, &pipeline);
+	if (parse_pipeline_yaml_file(config_filename, &pipeline) < 0)
+	{
+		return SLASH_EINVAL;
+	}
 
 	// Pack PipelineDefinition
 	size_t len_pipeline = pipeline_definition__get_packed_size(&pipeline);
@@ -178,12 +199,14 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 	return SLASH_SUCCESS;
 }
 
-slash_command_sub(ipp, pconf, slash_csp_configure_pipeline, "[OPTIONS...]", "Configure the pipeline modules");
+slash_command_sub(ippc, pipeline, slash_csp_configure_pipeline, "[OPTIONS...]", "Configure the pipeline modules");
 
-void parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
+int parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 {
 	yaml_parser_t parser;
-	FILE *fh = initialize_parser(filename, &parser);
+	FILE *fh = NULL;
+	if (initialize_parser(filename, &parser, fh) < 0)
+		return -1;
 
 	/* Module definitions */
 	ConfigParameter *params = NULL;
@@ -197,75 +220,75 @@ void parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 		if (!yaml_parser_parse(&parser, &event))
 		{
 			printf("Parser error %d\n", parser.error);
-			exit(EXIT_FAILURE);
+			return -1;
 		}
 		switch (event.type)
 		{
-			case YAML_MAPPING_START_EVENT:
-				// New Dash
-				param_idx++;
-				ConfigParameter *temp = realloc(params, (param_count + 1) * sizeof(ConfigParameter));
-				if (!temp)
-				{
-					fprintf(stderr, "Failed to allocate memory for ConfigParameter during parsing\n");
-					exit(EXIT_FAILURE);
-				}
-				params = temp; // Update the array pointer
+		case YAML_MAPPING_START_EVENT:
+			// New Dash
+			param_idx++;
+			ConfigParameter *temp = realloc(params, (param_count + 1) * sizeof(ConfigParameter));
+			if (!temp)
+			{
+				fprintf(stderr, "Failed to allocate memory for ConfigParameter during parsing\n");
+				return -1;
+			}
+			params = temp; // Update the array pointer
 
-				// Fill in the new struct
-				ConfigParameter param = CONFIG_PARAMETER__INIT;
-				params[param_idx] = param;
+			// Fill in the new struct
+			ConfigParameter param = CONFIG_PARAMETER__INIT;
+			params[param_idx] = param;
 
-				param_count++; // Increment the number of elements
-				break;
-			case YAML_SCALAR_EVENT:
-				// New set of ModuleDefinition encountered
-				if (strcmp((char *)event.data.scalar.value, "key") == 0)
-				{
-					// Expect the next event to be the value of order
-					if (!yaml_parser_parse(&parser, &event))
-						break;
-					params[param_idx].key = strdup((char *)event.data.scalar.value);
-				}
-				else if (strcmp((char *)event.data.scalar.value, "type") == 0)
-				{
-					// Expect the next event to be the value of name
-					if (!yaml_parser_parse(&parser, &event))
-						break;
-					params[param_idx].value_case = atoi((char *)event.data.scalar.value);
-				}
-				else if (strcmp((char *)event.data.scalar.value, "value") == 0)
-				{
-					// Expect the next event to be the value of param_id
-					if (!yaml_parser_parse(&parser, &event))
-						break;
-					switch (params[param_idx].value_case)
-					{
-						case CONFIG_PARAMETER__VALUE_BOOL_VALUE:
-							params[param_idx].bool_value = atoi((char *)event.data.scalar.value);
-							break;
-						case CONFIG_PARAMETER__VALUE_INT_VALUE:
-							params[param_idx].int_value = atoi((char *)event.data.scalar.value);
-							break;
-						case CONFIG_PARAMETER__VALUE_FLOAT_VALUE:
-							params[param_idx].float_value = atof((char *)event.data.scalar.value);
-							break;
-						case CONFIG_PARAMETER__VALUE_STRING_VALUE:
-							params[param_idx].string_value = strdup((char *)event.data.scalar.value);
-							break;
-						default:
-							// TODO: FAIL, unknown type!!!
-							break;
-					}
-				}
-				else
-				{
-					// Unexpected event type
-					fprintf(stderr, "Unexpected YAML scalar value format: %c.\n", event.data.scalar.value);
+			param_count++; // Increment the number of elements
+			break;
+		case YAML_SCALAR_EVENT:
+			// New set of ModuleDefinition encountered
+			if (strcmp((char *)event.data.scalar.value, "key") == 0)
+			{
+				// Expect the next event to be the value of order
+				if (!yaml_parser_parse(&parser, &event))
 					break;
+				params[param_idx].key = strdup((char *)event.data.scalar.value);
+			}
+			else if (strcmp((char *)event.data.scalar.value, "type") == 0)
+			{
+				// Expect the next event to be the value of name
+				if (!yaml_parser_parse(&parser, &event))
+					break;
+				params[param_idx].value_case = atoi((char *)event.data.scalar.value);
+			}
+			else if (strcmp((char *)event.data.scalar.value, "value") == 0)
+			{
+				// Expect the next event to be the value of param_id
+				if (!yaml_parser_parse(&parser, &event))
+					break;
+				switch (params[param_idx].value_case)
+				{
+					case CONFIG_PARAMETER__VALUE_BOOL_VALUE:
+						params[param_idx].bool_value = atoi((char *)event.data.scalar.value);
+						break;
+					case CONFIG_PARAMETER__VALUE_INT_VALUE:
+						params[param_idx].int_value = atoi((char *)event.data.scalar.value);
+						break;
+					case CONFIG_PARAMETER__VALUE_FLOAT_VALUE:
+						params[param_idx].float_value = atof((char *)event.data.scalar.value);
+						break;
+					case CONFIG_PARAMETER__VALUE_STRING_VALUE:
+						params[param_idx].string_value = strdup((char *)event.data.scalar.value);
+						break;
+					default:
+						// TODO: FAIL, unknown type!!!
+						break;
 				}
-			default:
-				break;
+			}
+			else
+			{
+				// Unexpected event type
+				fprintf(stderr, "Unexpected YAML scalar value format: %c.\n", event.data.scalar.value);
+				return -1;
+			}
+		default:
+			break;
 		}
 		if (event.type == YAML_SEQUENCE_END_EVENT)
 			break;
@@ -282,16 +305,16 @@ void parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 	}
 
 	cleanup_resources(&parser, &event, fh);
+
+	return 0;
 }
 
 static int slash_csp_configure_module(struct slash *slash)
 {
-	char *config_filename[100];
 	unsigned int node = PIPELINE_CSP_NODE_ID;
-	optparse_t *parser = optparse_new("mconf", "<module-idx>");
+	optparse_t *parser = optparse_new("module", "<module-idx> <config-file>");
 	optparse_add_help(parser);
 	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = PIPELINE_CSP_NODE_ID)");
-	optparse_add_string(parser, 'f', "file", "STRING", &config_filename, "file (default = pipeline_module<module-idx>_config.yaml)");
 
 	int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
 	if (argi < 0)
@@ -309,20 +332,28 @@ static int slash_csp_configure_module(struct slash *slash)
 
 	/* Parse module id */
 	int module_id = atoi(slash->argv[argi]);
-	if (module_id < 1 && module_id > PIPELINE_MAX_MODULES)
+	if (module_id < 1 || module_id > PIPELINE_MAX_MODULES)
 	{
 		printf("Module index is invalid. Range is 1-%d\n", PIPELINE_MAX_MODULES);
 		return SLASH_EINVAL;
 	}
 
-	/* Set correct filepath according to module id */
-	sprintf(config_filename, "../yaml/ipp/pipeline_module%d_config.yaml", module_id);
+	/* Check if config file is present */
+	if (++argi >= slash->argc)
+	{
+		printf("missing config-file path\n");
+		return SLASH_EINVAL;
+	}
+
+	/* Parse config file */
+	char *config_filename = strdup(slash->argv[argi]);
 
 	printf("Client: Configuring pipeline module %d, using %s\n", module_id, config_filename);
 
 	// Define PipelineDefinition and parse yaml file
 	ModuleConfig module_config = MODULE_CONFIG__INIT;
-	parse_module_yaml_file(config_filename, &module_config);
+	if (parse_module_yaml_file(config_filename, &module_config) < 0)
+		return SLASH_EINVAL;
 
 	// Pack PipelineDefinition
 	size_t len_pipeline = module_config__get_packed_size(&module_config);
@@ -353,4 +384,4 @@ static int slash_csp_configure_module(struct slash *slash)
 	return SLASH_SUCCESS;
 }
 
-slash_command_sub(ipp, mconf, slash_csp_configure_module, "[OPTIONS...] <module-idx>", "Configure a specific pipeline module");
+slash_command_sub(ippc, module, slash_csp_configure_module, "[OPTIONS...] <module-idx> <config-file>", "Configure a specific pipeline module");
