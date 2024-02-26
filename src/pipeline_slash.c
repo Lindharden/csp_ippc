@@ -280,7 +280,7 @@ void parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 
 static int slash_csp_configure_module(struct slash *slash)
 {
-	char *config_filename;
+	char *config_filename[100];
 	int node = PIPELINE_CSP_NODE_ID;
 	optparse_t *parser = optparse_new("mconf", "<module-idx>");
 	optparse_add_help(parser);
@@ -318,10 +318,11 @@ static int slash_csp_configure_module(struct slash *slash)
 
 	// Pack PipelineDefinition
 	size_t len_pipeline = module_config__get_packed_size(&module_config);
-	uint8_t packed_buf[len_pipeline];
-	pipeline_definition__pack(&module_config, packed_buf);
+	uint8_t packed_buf[len_pipeline + 1];
+	module_config__pack(&module_config, packed_buf);
+	packed_buf[len_pipeline] = '\0'; // indicate end of data
 
-	char *name;
+	char *name[20];
 	sprintf(name, "module_param_%d", module_id);
 	int offset = -1;
 	param_t *param = param_list_find_name(node, name);
@@ -332,11 +333,8 @@ static int slash_csp_configure_module(struct slash *slash)
 		return SLASH_EINVAL;
 	}
 
-	char valuebuf[128] __attribute__((aligned(16))) = { };
-	param_str_to_value(param->type, packed_buf, valuebuf);
-
 	// Insert packed pipeline definition into parameter
-	if (param_push_single(param, offset, valuebuf, 1, node, PIPELINE_CONFIG_TIMEOUT, 2) < 0)
+	if (param_push_single(param, offset, packed_buf, 1, node, PIPELINE_CONFIG_TIMEOUT, 2) < 0)
 	{
 		printf("No response\n");
 		return SLASH_EIO;
