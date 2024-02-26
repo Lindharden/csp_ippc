@@ -125,11 +125,18 @@ void parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline
 static int slash_csp_configure_pipeline(struct slash *slash)
 {
 	char *config_filename = "../yaml/ipp/pipeline_config.yaml";
-	int node = PIPELINE_CSP_NODE_ID;
-	optparse_t *parser = optparse_new("pconf", "");
+	unsigned int node = PIPELINE_CSP_NODE_ID;
+	optparse_t *parser = optparse_new("pconf", NULL);
 	optparse_add_help(parser);
-	optparse_add_int(parser, 'n', "node", "NUM", 0, &node, "node (default = PIPELINE_CSP_NODE_ID)");
+	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = PIPELINE_CSP_NODE_ID)");
 	optparse_add_string(parser, 'f', "file", "STRING", &config_filename, "file (default = pipeline_config.yaml)");
+
+	int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
+	if (argi < 0)
+	{
+		optparse_del(parser);
+		return SLASH_EINVAL;
+	}
 
 	if (strlen(config_filename) == 0)
 	{
@@ -171,7 +178,7 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 	return SLASH_SUCCESS;
 }
 
-slash_command_sub(ipp, pconf, slash_csp_configure_pipeline, NULL, "Configure the pipeline stages");
+slash_command_sub(ipp, pconf, slash_csp_configure_pipeline, "[OPTIONS...]", "Configure the pipeline modules");
 
 void parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 {
@@ -280,10 +287,10 @@ void parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 static int slash_csp_configure_module(struct slash *slash)
 {
 	char *config_filename[100];
-	int node = PIPELINE_CSP_NODE_ID;
+	unsigned int node = PIPELINE_CSP_NODE_ID;
 	optparse_t *parser = optparse_new("mconf", "<module-idx>");
 	optparse_add_help(parser);
-	optparse_add_int(parser, 'n', "node", "NUM", 0, &node, "node (default = PIPELINE_CSP_NODE_ID)");
+	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = PIPELINE_CSP_NODE_ID)");
 	optparse_add_string(parser, 'f', "file", "STRING", &config_filename, "file (default = pipeline_module<module-idx>_config.yaml)");
 
 	int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
@@ -346,4 +353,4 @@ static int slash_csp_configure_module(struct slash *slash)
 	return SLASH_SUCCESS;
 }
 
-slash_command_sub(ipp, mconf, slash_csp_configure_module, NULL, "Configure a specific pipeline module");
+slash_command_sub(ipp, mconf, slash_csp_configure_module, "[OPTIONS...] <module-idx>", "Configure a specific pipeline module");
