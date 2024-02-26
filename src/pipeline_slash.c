@@ -12,27 +12,41 @@
 #include "include/csp_pipeline_config/pipeline_config.pb-c.h"
 #include "include/csp_pipeline_config/module_config.pb-c.h"
 
-void parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
+FILE *initialize_parser(const char *filename, yaml_parser_t *parser)
 {
 	FILE *fh = fopen(filename, "r");
+
+	/* Initialize parser */
+	if (!yaml_parser_initialize(parser))
+		fputs("Failed to initialize parser!\n", stderr);
+	if (fh == NULL)
+		fputs("Failed to open file!\n", stderr);
+
+	/* Set input file */
+	yaml_parser_set_input_file(parser, fh);
+
+	return fh;
+}
+
+void cleanup_resources(yaml_parser_t *parser, yaml_event_t *event, FILE *fh)
+{
+	yaml_event_delete(event);
+	yaml_parser_delete(parser);
+	fclose(fh);
+}
+
+void parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
+{
 	yaml_parser_t parser;
-	yaml_event_t event;
+	FILE *fh = initialize_parser(filename, &parser);
 
 	/* Module definitions */
 	ModuleDefinition *modules = NULL;
 	int module_idx = -1;  // current module index
 	int module_count = 0; // find total amount of modules
 
-	/* Initialize parser */
-	if (!yaml_parser_initialize(&parser))
-		fputs("Failed to initialize parser!\n", stderr);
-	if (fh == NULL)
-		fputs("Failed to open file!\n", stderr);
-
-	/* Set input file */
-	yaml_parser_set_input_file(&parser, fh);
-
 	/* START parsing */
+	yaml_event_t event;
 	while (1)
 	{
 		if (!yaml_parser_parse(&parser, &event))
@@ -65,7 +79,7 @@ void parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline
 				{
 					// Expect the next event to be the value of order
 					if (!yaml_parser_parse(&parser, &event))
-						break;	
+						break;
 					modules[module_idx].order = atoi((char *)event.data.scalar.value);
 				}
 				else if (strcmp((char *)event.data.scalar.value, "name") == 0)
@@ -105,10 +119,7 @@ void parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline
 		pipeline->modules[i] = &modules[i];
 	}
 
-	/* Cleanup */
-	yaml_event_delete(&event);
-	yaml_parser_delete(&parser);
-	fclose(fh);
+	cleanup_resources(&parser, &event, fh);
 }
 
 static int slash_csp_configure_pipeline(struct slash *slash)
@@ -134,7 +145,7 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 
 	// Pack PipelineDefinition
 	size_t len_pipeline = pipeline_definition__get_packed_size(&pipeline);
-    uint8_t packed_buf[len_pipeline + 1];
+	uint8_t packed_buf[len_pipeline + 1];
 	pipeline_definition__pack(&pipeline, packed_buf);
 	packed_buf[len_pipeline] = '\0'; // indicate end of data
 
@@ -164,25 +175,16 @@ slash_command_sub(ipp, pconf, slash_csp_configure_pipeline, NULL, "Configure the
 
 void parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 {
-	FILE *fh = fopen(filename, "r");
 	yaml_parser_t parser;
-	yaml_event_t event;
+	FILE *fh = initialize_parser(filename, &parser);
 
 	/* Module definitions */
 	ConfigParameter *params = NULL;
-	int param_idx = -1;  // current module index
+	int param_idx = -1;	 // current module index
 	int param_count = 0; // find total amount of modules
 
-	/* Initialize parser */
-	if (!yaml_parser_initialize(&parser))
-		fputs("Failed to initialize parser!\n", stderr);
-	if (fh == NULL)
-		fputs("Failed to open file!\n", stderr);
-
-	/* Set input file */
-	yaml_parser_set_input_file(&parser, fh);
-
 	/* START parsing */
+	yaml_event_t event;
 	while (1)
 	{
 		if (!yaml_parser_parse(&parser, &event))
@@ -215,7 +217,7 @@ void parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 				{
 					// Expect the next event to be the value of order
 					if (!yaml_parser_parse(&parser, &event))
-						break;	
+						break;
 					params[param_idx].key = strdup((char *)event.data.scalar.value);
 				}
 				else if (strcmp((char *)event.data.scalar.value, "type") == 0)
@@ -232,21 +234,21 @@ void parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 						break;
 					switch (params[param_idx].value_case)
 					{
-					case CONFIG_PARAMETER__VALUE_BOOL_VALUE:
-						params[param_idx].bool_value = atoi((char *)event.data.scalar.value);
-						break;
-					case CONFIG_PARAMETER__VALUE_INT_VALUE:
-						params[param_idx].int_value = atoi((char *)event.data.scalar.value);
-						break;
-					case CONFIG_PARAMETER__VALUE_FLOAT_VALUE:
-						params[param_idx].float_value = atof((char *)event.data.scalar.value);
-						break;
-					case CONFIG_PARAMETER__VALUE_STRING_VALUE:
-						params[param_idx].string_value = strdup((char *)event.data.scalar.value);
-						break;
-					default:
-						// TODO: FAIL, unknown type!!!
-						break;
+						case CONFIG_PARAMETER__VALUE_BOOL_VALUE:
+							params[param_idx].bool_value = atoi((char *)event.data.scalar.value);
+							break;
+						case CONFIG_PARAMETER__VALUE_INT_VALUE:
+							params[param_idx].int_value = atoi((char *)event.data.scalar.value);
+							break;
+						case CONFIG_PARAMETER__VALUE_FLOAT_VALUE:
+							params[param_idx].float_value = atof((char *)event.data.scalar.value);
+							break;
+						case CONFIG_PARAMETER__VALUE_STRING_VALUE:
+							params[param_idx].string_value = strdup((char *)event.data.scalar.value);
+							break;
+						default:
+							// TODO: FAIL, unknown type!!!
+							break;
 					}
 				}
 				else
@@ -272,10 +274,7 @@ void parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 		module_config->parameters[i] = &params[i];
 	}
 
-	/* Cleanup */
-	yaml_event_delete(&event);
-	yaml_parser_delete(&parser);
-	fclose(fh);
+	cleanup_resources(&parser, &event, fh);
 }
 
 static int slash_csp_configure_module(struct slash *slash)
@@ -287,14 +286,16 @@ static int slash_csp_configure_module(struct slash *slash)
 	optparse_add_int(parser, 'n', "node", "NUM", 0, &node, "node (default = PIPELINE_CSP_NODE_ID)");
 	optparse_add_string(parser, 'f', "file", "STRING", &config_filename, "file (default = pipeline_module<module-idx>_config.yaml)");
 
-	int argi = optparse_parse(parser, slash->argc - 1, (const char **) slash->argv + 1);
-    if (argi < 0) {
-        optparse_del(parser);
-	    return SLASH_EINVAL;
-    }
+	int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
+	if (argi < 0)
+	{
+		optparse_del(parser);
+		return SLASH_EINVAL;
+	}
 
 	/* Check if module id is present */
-	if (++argi >= slash->argc) {
+	if (++argi >= slash->argc)
+	{
 		printf("missing module id\n");
 		return SLASH_EINVAL;
 	}
