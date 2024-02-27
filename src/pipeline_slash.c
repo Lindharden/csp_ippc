@@ -5,14 +5,15 @@
 #include <slash/optparse.h>
 #include <slash/dflopt.h>
 #include <param/param.h>
-#include <param/param_list.h>
 #include <yaml.h>
 #include <errno.h>
 #include <math.h>
 
-#include "include/csp_pipeline_config/pipeline_slash.h"
 #include "include/csp_pipeline_config/pipeline_config.pb-c.h"
 #include "include/csp_pipeline_config/module_config.pb-c.h"
+
+#define PIPELINE_MAX_MODULES 6
+#define DATA_PARAM_SIZE 188
 
 int initialize_parser(const char *filename, yaml_parser_t *parser, FILE *fh)
 {
@@ -220,12 +221,19 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 
 static int slash_csp_configure_pipeline(struct slash *slash)
 {
+	unsigned int node = slash_dfl_node; // fetch current node id
+    unsigned int timeout = slash_dfl_timeout;
 	char *config_filename = "../yaml/ipp/pipeline_config.yaml";
-	unsigned int node = PIPELINE_CSP_NODE_ID;
+	unsigned int paramver = 2;
+	int ack_with_pull = true;
+
 	optparse_t *parser = optparse_new("pipeline", NULL);
 	optparse_add_help(parser);
-	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = PIPELINE_CSP_NODE_ID)");
+	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = <env>)");
+    optparse_add_unsigned(parser, 't', "timeout", "NUM", 0, &timeout, "timeout (default = <env>)");
 	optparse_add_string(parser, 'f', "file", "STRING", &config_filename, "file (default = pipeline_config.yaml)");
+    optparse_add_int(parser, 'v', "paramver", "NUM", 0, &paramver, "parameter system version (default = 2)");
+	optparse_add_set(parser, 'a', "no_ack_push", 0, &ack_with_pull, "Disable ack with param push queue");
 
 	int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
 	if (argi < 0)
@@ -255,24 +263,16 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 	pipeline_definition__pack(&pipeline, &packed_buf[1]); // Insert after first index
 	packed_buf[0] = len_pipeline; // Insert data length in first index
 
-	char *name = "pipeline_config";
-	int offset = -1;
-	param_t *param = param_list_find_name(node, name);
-
-	if (param == NULL)
-	{
-		printf("%s not found\n", name);
-		return SLASH_EINVAL;
-	}
+	// Mirror pipeline_config parameter
+	int param_id = 2; // ID pipeline_config
+	PARAM_DEFINE_REMOTE_DYNAMIC(param_id, pipeline_config, node, PARAM_TYPE_DATA, DATA_PARAM_SIZE, 1, PM_CONF, &packed_buf, NULL);
 
 	// Insert packed pipeline definition into parameter
-	if (param_push_single(param, offset, packed_buf, 1, node, PIPELINE_CONFIG_TIMEOUT, 2, true) < 0)
+	if (param_push_single(&pipeline_config, -1, packed_buf, 0, node, timeout, paramver, ack_with_pull) < 0)
 	{
 		printf("No response\n");
 		return SLASH_EIO;
 	}
-
-	param_print(param, -1, NULL, 0, 2, 0);
 
 	return SLASH_SUCCESS;
 }
@@ -410,10 +410,16 @@ int parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 
 static int slash_csp_configure_module(struct slash *slash)
 {
-	unsigned int node = PIPELINE_CSP_NODE_ID;
+	unsigned int node = slash_dfl_node; // fetch current node id
+    unsigned int timeout = slash_dfl_timeout;
+	unsigned int paramver = 2;
+	int ack_with_pull = true;
 	optparse_t *parser = optparse_new("module", "<module-idx> <config-file>");
 	optparse_add_help(parser);
-	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = PIPELINE_CSP_NODE_ID)");
+	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = <env>)");
+    optparse_add_unsigned(parser, 't', "timeout", "NUM", 0, &timeout, "timeout (default = <env>)");
+    optparse_add_int(parser, 'v', "paramver", "NUM", 0, &paramver, "parameter system version (default = 2)");
+	optparse_add_set(parser, 'a', "no_ack_push", 0, &ack_with_pull, "Disable ack with param push queue");
 
 	int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
 	if (argi < 0)
@@ -460,25 +466,21 @@ static int slash_csp_configure_module(struct slash *slash)
 	module_config__pack(&module_config, &packed_buf[1]); // Insert after first index
 	packed_buf[0] = len_pipeline; // Insert data length in first index
 
-	char *name[20];
-	sprintf(name, "module_param_%d", module_id);
-	int offset = -1;
-	param_t *param = param_list_find_name(node, name);
+	// Mirror module_param parameter
+	int param_id = module_id + 2; // find correct parameter id (Offset by +2 on pipeline server)
+	PARAM_DEFINE_REMOTE_DYNAMIC(param_id, module_param, node, PARAM_TYPE_DATA, DATA_PARAM_SIZE, 1, PM_CONF, &packed_buf, NULL);
 
-	if (param == NULL)
-	{
-		printf("%s not found\n", name);
-		return SLASH_EINVAL;
-	}
+	// The parameter name must have the id
+	char name[20];
+	sprintf(name, "module_param_%d", module_id);
+	module_param.name = name;
 
 	// Insert packed pipeline definition into parameter
-	if (param_push_single(param, offset, packed_buf, 1, node, PIPELINE_CONFIG_TIMEOUT, 2) < 0)
+	if (param_push_single(&module_param, -1, packed_buf, 0, node, timeout, paramver, ack_with_pull) < 0)
 	{
 		printf("No response\n");
 		return SLASH_EIO;
 	}
-
-	param_print(param, -1, NULL, 0, 2, 0);
 
 	return SLASH_SUCCESS;
 }
