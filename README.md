@@ -15,29 +15,41 @@ csp_ippc_dep = dependency('csp_ippc', fallback: ['csp_ippc', 'csp_ippc_dep'], re
 
 ### Command 1: `ippc pipeline`
 
-This command updates what modules are to be active in the pipeline.
-The default configuration file can be overridden using the `-f` flag.
+This command updates what modules are to be active in the specified pipeline.
+Specify id of pipeline and yaml config file (relative path).
 Node should be given by \<env\> using the node command.
 
 Usage:
 
 ```
-ippc pipeline [options]
+ippc pipeline [options] <pipeline-idx> <config-file>
 ```
 
 Options:
 
 - `-n, --node [NUM]`: node (default = \<env\>).
 - `-t, --timeout [NUM]`: timeout (default = \<env\>).
-- `-f, --file [STRING]`: file (default = pipeline_config.yaml).
 - `-v, --paramver`: parameter system version (default = 2).
 - `-a, --no_ack_push`: Disable ack with param push queue (default = true).
 
 Example:
-The below example updates the pipeline configuration on node 162 using the specified yaml file.
+The below example updates the pipeline configuration for pipeline 1 on node 162 using the specified yaml file.
 
 ```
-ippc pipeline -n 162 -f pipeline_config.yaml
+ippc pipeline -n 162 1 "pipeline_config.yaml"
+```
+
+Example of a valid pipeline configuration file:
+
+```yaml
+pipeline_name: rgb
+modules:
+  - order: 1
+    param_id: 1
+    name: flip_horizontally
+  - order: 2
+    param_id: 2
+    name: bw_convert
 ```
 
 ### Command 2: `ippc module`
@@ -64,4 +76,16 @@ The below example update the parameters for module 2 on node 162 using the speci
 
 ```
 ippc module -n 162 2 "module_config.yaml"
+```
+
+Example of a valid module configuration file:
+
+```yaml
+- key: "flip_percent"
+  type: 4
+  value: 0.50
+
+- key: "flip_amount"
+  type: 3
+  value: 1
 ```
