@@ -42,14 +42,12 @@ ippc pipeline -n 162 1 "pipeline_config.yaml"
 Example of a valid pipeline configuration file:
 
 ```yaml
-pipeline_name: rgb
-modules:
-  - order: 1
-    param_id: 1
-    name: flip_horizontally
-  - order: 2
-    param_id: 2
-    name: bw_convert
+- order: 1
+  param_id: 1
+  name: flip_horizontally
+- order: 2
+  param_id: 2
+  name: bw_convert
 ```
 
 ### Command 2: `ippc module`

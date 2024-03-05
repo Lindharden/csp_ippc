@@ -123,7 +123,6 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 	ModuleDefinition *modules = NULL;
 	int module_idx = -1;  // current module index
 	int module_count = 0; // find total amount of modules
-    int parsing_modules = 0; // Flag to indicate if we are parsing modules
 
 	/* START parsing */
 	yaml_event_t event;
@@ -137,7 +136,6 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 		switch (event.type)
 		{
 			case YAML_MAPPING_START_EVENT:
-				if (!parsing_modules) break;
 				// New Dash
 				module_idx++;
 				ModuleDefinition *temp = realloc(modules, (module_count + 1) * sizeof(ModuleDefinition));
@@ -156,19 +154,6 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 				module_count++;
 				break;
 			case YAML_SCALAR_EVENT:
-				if (strcmp((char *)event.data.scalar.value, "pipeline_name") == 0)
-				{
-					// Expect the next event to be the value of name
-                    if (!yaml_parser_parse(&parser, &event))
-                        break;
-                    pipeline->name = strdup((char *)event.data.scalar.value);
-					break;
-				}
-				else if (strcmp((char *)event.data.scalar.value, "modules") == 0)
-				{
-					parsing_modules = 1;
-					break;
-				}
 				// New set of ModuleDefinition encountered
 				if (strcmp((char *)event.data.scalar.value, "order") == 0)
 				{
@@ -290,6 +275,8 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 	{
 		return SLASH_EINVAL;
 	}
+
+	pipeline.id = pipeline_id;
 
 	// Pack PipelineDefinition
 	size_t len_pipeline = pipeline_definition__get_packed_size(&pipeline);
