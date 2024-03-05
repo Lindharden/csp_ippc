@@ -12,7 +12,10 @@
 #include "include/csp_pipeline_config/pipeline_config.pb-c.h"
 #include "include/csp_pipeline_config/module_config.pb-c.h"
 
-#define PIPELINE_MAX_MODULES 6
+#define MAX_MODULES 20
+#define MAX_PIPELINES 6
+#define PIPELINE_PARAMID_OFFSET 10
+#define MODULE_PARAMID_OFFSET 30
 #define DATA_PARAM_SIZE 188
 
 int initialize_parser(const char *filename, yaml_parser_t *parser, FILE *fh)
@@ -120,6 +123,7 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 	ModuleDefinition *modules = NULL;
 	int module_idx = -1;  // current module index
 	int module_count = 0; // find total amount of modules
+    int parsing_modules = 0; // Flag to indicate if we are parsing modules
 
 	/* START parsing */
 	yaml_event_t event;
@@ -133,6 +137,7 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 		switch (event.type)
 		{
 			case YAML_MAPPING_START_EVENT:
+				if (!parsing_modules) break;
 				// New Dash
 				module_idx++;
 				ModuleDefinition *temp = realloc(modules, (module_count + 1) * sizeof(ModuleDefinition));
@@ -151,6 +156,19 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 				module_count++;
 				break;
 			case YAML_SCALAR_EVENT:
+				if (strcmp((char *)event.data.scalar.value, "pipeline_name") == 0)
+				{
+					// Expect the next event to be the value of name
+                    if (!yaml_parser_parse(&parser, &event))
+                        break;
+                    pipeline->name = strdup((char *)event.data.scalar.value);
+					break;
+				}
+				else if (strcmp((char *)event.data.scalar.value, "modules") == 0)
+				{
+					parsing_modules = 1;
+					break;
+				}
 				// New set of ModuleDefinition encountered
 				if (strcmp((char *)event.data.scalar.value, "order") == 0)
 				{
@@ -178,8 +196,8 @@ int parse_pipeline_yaml_file(const char *filename, PipelineDefinition *pipeline)
 					{
 						return -1;
 					}
-					if (modules[module_idx].param_id < 1 || modules[module_idx].param_id > PIPELINE_MAX_MODULES) {
-						fprintf(stderr, "Error: Param_id is invalid. Range is 1-%d\n", PIPELINE_MAX_MODULES);
+					if (modules[module_idx].param_id < 1 || modules[module_idx].param_id > MAX_MODULES) {
+						fprintf(stderr, "Error: Param_id is invalid. Range is 1-%d\n", MAX_MODULES);
 						return -1;
 					}
 				}
@@ -223,15 +241,12 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 {
 	unsigned int node = slash_dfl_node; // fetch current node id
     unsigned int timeout = slash_dfl_timeout;
-	char *config_filename = "../yaml/ipp/pipeline_config.yaml";
 	unsigned int paramver = 2;
 	int ack_with_pull = true;
-
-	optparse_t *parser = optparse_new("pipeline", NULL);
+	optparse_t *parser = optparse_new("pipeline", "<pipeline-idx> <config-file>");
 	optparse_add_help(parser);
 	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = <env>)");
     optparse_add_unsigned(parser, 't', "timeout", "NUM", 0, &timeout, "timeout (default = <env>)");
-	optparse_add_string(parser, 'f', "file", "STRING", &config_filename, "file (default = pipeline_config.yaml)");
     optparse_add_int(parser, 'v', "paramver", "NUM", 0, &paramver, "parameter system version (default = 2)");
 	optparse_add_set(parser, 'a', "no_ack_push", 0, &ack_with_pull, "Disable ack with param push queue");
 
@@ -242,13 +257,32 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 		return SLASH_EINVAL;
 	}
 
-	if (strlen(config_filename) == 0)
+	/* Check if pipeline id is present */
+	if (++argi >= slash->argc)
 	{
-		printf("Config file path cannot be empty\n");
+		printf("Missing pipeline id\n");
 		return SLASH_EINVAL;
 	}
 
-	printf("Client: Configuring pipeline using %s\n", config_filename);
+	/* Parse pipeline id */
+	int pipeline_id = atoi(slash->argv[argi]);
+	if (pipeline_id < 1 || pipeline_id > MAX_PIPELINES)
+	{
+		printf("Pipeline index is invalid. Range is 1-%d\n", MAX_PIPELINES);
+		return SLASH_EINVAL;
+	}
+
+	/* Check if config file is present */
+	if (++argi >= slash->argc)
+	{
+		printf("Missing config-file path\n");
+		return SLASH_EINVAL;
+	}
+
+	/* Parse config file */
+	char *config_filename = strdup(slash->argv[argi]);
+
+	printf("Client: Configuring pipeline %d, using %s\n", pipeline_id, config_filename);
 
 	// Define PipelineDefinition and parse yaml file
 	PipelineDefinition pipeline = PIPELINE_DEFINITION__INIT;
@@ -259,13 +293,22 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 
 	// Pack PipelineDefinition
 	size_t len_pipeline = pipeline_definition__get_packed_size(&pipeline);
+	if (len_pipeline + 1 >= DATA_PARAM_SIZE) {
+		printf("Packed configuration too large");
+		return SLASH_EINVAL;
+	}
 	uint8_t packed_buf[len_pipeline + 1];
 	pipeline_definition__pack(&pipeline, &packed_buf[1]); // Insert after first index
 	packed_buf[0] = len_pipeline; // Insert data length in first index
 
 	// Mirror pipeline_config parameter
-	int param_id = 2; // ID pipeline_config
+	int param_id = pipeline_id + PIPELINE_PARAMID_OFFSET - 1; // find correct pipeline id (Offset by +10 on pipeline server)
 	PARAM_DEFINE_REMOTE_DYNAMIC(param_id, pipeline_config, node, PARAM_TYPE_DATA, DATA_PARAM_SIZE, 1, PM_CONF, &packed_buf, NULL);
+
+	// The parameter name must have the id
+	char name[20];
+	sprintf(name, "pipeline_config_%d", pipeline_id);
+	pipeline_config.name = name;
 
 	// Insert packed pipeline definition into parameter
 	if (param_push_single(&pipeline_config, -1, packed_buf, 0, node, timeout, paramver, ack_with_pull) < 0)
@@ -277,7 +320,7 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 	return SLASH_SUCCESS;
 }
 
-slash_command_sub(ippc, pipeline, slash_csp_configure_pipeline, "[OPTIONS...]", "Configure the pipeline modules");
+slash_command_sub(ippc, pipeline, slash_csp_configure_pipeline, "[OPTIONS...] <pipeline-idx> <config-file>", "Configure a specific pipeline");
 
 int parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 {
@@ -437,9 +480,9 @@ static int slash_csp_configure_module(struct slash *slash)
 
 	/* Parse module id */
 	int module_id = atoi(slash->argv[argi]);
-	if (module_id < 1 || module_id > PIPELINE_MAX_MODULES)
+	if (module_id < 1 || module_id > MAX_MODULES)
 	{
-		printf("Module index is invalid. Range is 1-%d\n", PIPELINE_MAX_MODULES);
+		printf("Module index is invalid. Range is 1-%d\n", MAX_MODULES);
 		return SLASH_EINVAL;
 	}
 
@@ -453,7 +496,7 @@ static int slash_csp_configure_module(struct slash *slash)
 	/* Parse config file */
 	char *config_filename = strdup(slash->argv[argi]);
 
-	printf("Client: Configuring pipeline module %d, using %s\n", module_id, config_filename);
+	printf("Client: Configuring module %d, using %s\n", module_id, config_filename);
 
 	// Define PipelineDefinition and parse yaml file
 	ModuleConfig module_config = MODULE_CONFIG__INIT;
@@ -461,13 +504,17 @@ static int slash_csp_configure_module(struct slash *slash)
 		return SLASH_EINVAL;
 
 	// Pack PipelineDefinition
-	size_t len_pipeline = module_config__get_packed_size(&module_config);
-	uint8_t packed_buf[len_pipeline + 1];
+	size_t len_module = module_config__get_packed_size(&module_config);
+	if (len_module + 1 >= DATA_PARAM_SIZE) {
+		printf("Packed configuration too large");
+		return SLASH_EINVAL;
+	}
+	uint8_t packed_buf[len_module + 1];
 	module_config__pack(&module_config, &packed_buf[1]); // Insert after first index
-	packed_buf[0] = len_pipeline; // Insert data length in first index
+	packed_buf[0] = len_module; // Insert data length in first index
 
 	// Mirror module_param parameter
-	int param_id = module_id + 2; // find correct parameter id (Offset by +2 on pipeline server)
+	int param_id = module_id + MODULE_PARAMID_OFFSET - 1; // find correct parameter id (Offset by +30 on pipeline server)
 	PARAM_DEFINE_REMOTE_DYNAMIC(param_id, module_param, node, PARAM_TYPE_DATA, DATA_PARAM_SIZE, 1, PM_CONF, &packed_buf, NULL);
 
 	// The parameter name must have the id
@@ -485,4 +532,4 @@ static int slash_csp_configure_module(struct slash *slash)
 	return SLASH_SUCCESS;
 }
 
-slash_command_sub(ippc, module, slash_csp_configure_module, "[OPTIONS...] <module-idx> <config-file>", "Configure a specific pipeline module");
+slash_command_sub(ippc, module, slash_csp_configure_module, "[OPTIONS...] <module-idx> <config-file>", "Configure a specific module");
