@@ -276,8 +276,6 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 		return SLASH_EINVAL;
 	}
 
-	pipeline.id = pipeline_id;
-
 	// Pack PipelineDefinition
 	size_t len_pipeline = pipeline_definition__get_packed_size(&pipeline);
 	if (len_pipeline + 1 >= DATA_PARAM_SIZE) {
