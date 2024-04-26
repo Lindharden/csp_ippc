@@ -518,3 +518,46 @@ static int slash_csp_configure_module(struct slash *slash)
 }
 
 slash_command_sub(ippc, module, slash_csp_configure_module, "[OPTIONS...] <module-idx> <config-file>", "Configure a specific module");
+
+#define PARAMID_BUFFER_LIST 100
+#define PARAMID_BUFFER_HEAD 101
+#define PARAMID_BUFFER_TAIL 102
+
+static int slash_csp_buffer_get(struct slash *slash)
+{
+	unsigned int node = slash_dfl_node; // fetch current node id
+    unsigned int timeout = slash_dfl_timeout;
+	unsigned int paramver = 2;
+	int ack_with_pull = true;
+	optparse_t *parser = optparse_new("get", "<item-idx>");
+	optparse_add_help(parser);
+	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = <env>)");
+    optparse_add_unsigned(parser, 't', "timeout", "NUM", 0, &timeout, "timeout (default = <env>)");
+    optparse_add_int(parser, 'v', "paramver", "NUM", 0, &paramver, "parameter system version (default = 2)");
+	optparse_add_set(parser, 'a', "no_ack_push", 0, &ack_with_pull, "Disable ack with param push queue");
+
+	int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
+	if (argi < 0)
+	{
+		optparse_del(parser);
+		return SLASH_EINVAL;
+	}
+
+	/* Check if module id is present */
+	if (++argi >= slash->argc)
+	{
+		printf("Missing module id\n");
+		return SLASH_EINVAL;
+	}
+
+	uint32_t _head;
+	uint32_t _tail;
+	uint32_t _list[10];
+	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_HEAD, vmem_upload_head, node, PARAM_TYPE_UINT32, -1, 0, PM_REMOTE, &_head, NULL);
+	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_TAIL, vmem_upload_tail, node, PARAM_TYPE_UINT32, -1, 0, PM_REMOTE, &_tail, NULL);
+	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_LIST, vmem_upload_tail, node, PARAM_TYPE_UINT32, 10, sizeof(uint32_t), PM_REMOTE, &_list, NULL);
+}
+
+slash_command_sub(ippb, get, slash_csp_buffer_get, "[OPTIONS...] <module-idx> <config-file>", "Configure a specific m<item-idx>odule");
+
+
