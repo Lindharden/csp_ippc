@@ -5,12 +5,18 @@
 #include <slash/optparse.h>
 #include <slash/dflopt.h>
 #include <param/param.h>
+#include <param/param_client.h>
+#include <vmem/vmem_client.h>
+#include <vmem/vmem_server.h>
 #include <yaml.h>
 #include <errno.h>
 #include <math.h>
+#include <jxl/decode.h>
 
 #include "include/csp_pipeline_config/pipeline_config.pb-c.h"
 #include "include/csp_pipeline_config/module_config.pb-c.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "include/csp_pipeline_buffer/stb_image_write.h"
 
 #define MAX_MODULES 20
 #define MAX_PIPELINES 6
@@ -232,7 +238,7 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 	optparse_add_help(parser);
 	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = <env>)");
     optparse_add_unsigned(parser, 't', "timeout", "NUM", 0, &timeout, "timeout (default = <env>)");
-    optparse_add_int(parser, 'v', "paramver", "NUM", 0, &paramver, "parameter system version (default = 2)");
+    optparse_add_unsigned(parser, 'v', "paramver", "NUM", 0, &paramver, "parameter system version (default = 2)");
 	optparse_add_set(parser, 'a', "no_ack_push", 0, &ack_with_pull, "Disable ack with param push queue");
 
 	int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
@@ -446,7 +452,7 @@ static int slash_csp_configure_module(struct slash *slash)
 	optparse_add_help(parser);
 	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = <env>)");
     optparse_add_unsigned(parser, 't', "timeout", "NUM", 0, &timeout, "timeout (default = <env>)");
-    optparse_add_int(parser, 'v', "paramver", "NUM", 0, &paramver, "parameter system version (default = 2)");
+    optparse_add_unsigned(parser, 'v', "paramver", "NUM", 0, &paramver, "parameter system version (default = 2)");
 	optparse_add_set(parser, 'a', "no_ack_push", 0, &ack_with_pull, "Disable ack with param push queue");
 
 	int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
@@ -522,6 +528,9 @@ slash_command_sub(ippc, module, slash_csp_configure_module, "[OPTIONS...] <modul
 #define PARAMID_BUFFER_LIST 100
 #define PARAMID_BUFFER_HEAD 101
 #define PARAMID_BUFFER_TAIL 102
+#define VMEM_NAME "buffer.vmem"
+#define BUFFER_LIST_SIZE 10
+#define BUFFER_VMEM_SIZE 1000000
 
 static int slash_csp_buffer_get(struct slash *slash)
 {
@@ -529,11 +538,11 @@ static int slash_csp_buffer_get(struct slash *slash)
     unsigned int timeout = slash_dfl_timeout;
 	unsigned int paramver = 2;
 	int ack_with_pull = true;
-	optparse_t *parser = optparse_new("get", "<item-idx>");
+	optparse_t *parser = optparse_new("get", "<tail-offset>");
 	optparse_add_help(parser);
 	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = <env>)");
     optparse_add_unsigned(parser, 't', "timeout", "NUM", 0, &timeout, "timeout (default = <env>)");
-    optparse_add_int(parser, 'v', "paramver", "NUM", 0, &paramver, "parameter system version (default = 2)");
+    optparse_add_unsigned(parser, 'v', "paramver", "NUM", 0, &paramver, "parameter system version (default = 2)");
 	optparse_add_set(parser, 'a', "no_ack_push", 0, &ack_with_pull, "Disable ack with param push queue");
 
 	int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
@@ -543,21 +552,166 @@ static int slash_csp_buffer_get(struct slash *slash)
 		return SLASH_EINVAL;
 	}
 
-	/* Check if module id is present */
+	/* Check if tail offset is present */
 	if (++argi >= slash->argc)
 	{
-		printf("Missing module id\n");
+		printf("Missing tail offset\n");
 		return SLASH_EINVAL;
 	}
 
+	/* Fetch tail offset parameter */
+	int tail_offset = atoi(slash->argv[argi]);
+
 	uint32_t _head;
 	uint32_t _tail;
-	uint32_t _list[10];
-	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_HEAD, vmem_upload_head, node, PARAM_TYPE_UINT32, -1, 0, PM_REMOTE, &_head, NULL);
-	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_TAIL, vmem_upload_tail, node, PARAM_TYPE_UINT32, -1, 0, PM_REMOTE, &_tail, NULL);
-	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_LIST, vmem_upload_tail, node, PARAM_TYPE_UINT32, 10, sizeof(uint32_t), PM_REMOTE, &_list, NULL);
+	uint32_t _list[BUFFER_LIST_SIZE];
+	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_HEAD, buffer_head, node, PARAM_TYPE_UINT32, -1, 0, PM_REMOTE, &_head, NULL);
+	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_TAIL, buffer_tail, node, PARAM_TYPE_UINT32, -1, 0, PM_REMOTE, &_tail, NULL);
+	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_LIST, buffer_list, node, PARAM_TYPE_UINT32, BUFFER_LIST_SIZE, sizeof(uint32_t), PM_REMOTE, &_list, NULL);
+	
+	 /* Add remote parameters to local parameters */
+    param_list_add(&buffer_head);
+    param_list_add(&buffer_tail);
+    param_list_add(&buffer_list);
+
+	vmem_list2_t vmem_buffer = {0};
+
+	if (vmem_client_find(node, timeout, &vmem_buffer, 2, VMEM_NAME, 5) < 0)
+	{   
+		// error when locating the vmem file
+		printf("Error: Could not locate VMEM file with name %s\n", VMEM_NAME);
+		return SLASH_EINVAL;
+	}
+
+	/* Update head and tail */
+	if (param_pull_single(&buffer_head, -1, 1, 0, node, timeout, 2) < 0) 
+	{
+		printf("Error: ");
+		return SLASH_EINVAL;
+	}
+	if (param_pull_single(&buffer_tail, -1, 1, 0, node, timeout, 2) < 0) 
+	{
+		printf("Error: ");
+		return SLASH_EINVAL;
+	}
+
+	/* Fail if offset is too large */
+	int distance = _tail < _head ? _head - _tail : BUFFER_LIST_SIZE - _tail + _head;
+	if (distance < tail_offset)
+	{
+		printf("Error: tail offset too large, available range is 0-%d", _head - _tail);
+		return SLASH_EINVAL;
+	}
+
+	/* Calculate index in buffer list to read from */
+	uint32_t list_index = (_tail + tail_offset) % BUFFER_LIST_SIZE;
+
+	/* Fetch image address from buffer list */
+	if (param_pull_single(&buffer_list, list_index, 1, 0, node, timeout, 2) < 0)
+	{
+		printf("Error: Could not fetch read address from image buffer");
+		return SLASH_EINVAL;
+	}
+
+	/* Index to read to in buffer list */
+	if (param_pull_single(&buffer_list, list_index + 1, 1, 0, node, timeout, 2) < 0) 
+	{
+		printf("Error: Could not fetch address to read to from image buffer");
+		return SLASH_EINVAL;
+	}
+	
+	/* Fetch read address and data size */
+	uint32_t read_from = _list[list_index];
+	uint32_t read_to = _list[list_index + 1];
+	if (read_to < read_from) read_from = 0; // wraparound
+	uint32_t read_len = read_to - read_from;
+	uint64_t read_address = _list[list_index] + vmem_buffer.vaddr;
+
+	/* Download image file */
+    printf("Download %u bytes from node %u at addr %u\n", read_len, node, read_address);
+	unsigned char *image_data = (unsigned char *)malloc(read_len); // image buffer
+	if (image_data == NULL)
+	{
+		printf("Error: Could not allocate memory for image buffer");
+		return SLASH_EINVAL;
+	}
+	if (vmem_download(node, timeout, read_address, read_len, (char *)image_data, 2, 1) < 0)
+	{
+		printf("Error: Could not download image data");
+		return SLASH_EINVAL;
+	}
+	
+	/* Decode image data using JXL */
+	uint32_t metadata_size = *((uint32_t *)(image_data));
+	uint32_t image_data_size = read_len - sizeof(uint32_t) - metadata_size;
+    JxlDecoder* decoder = JxlDecoderCreate(NULL);
+	JxlDecoderStatus res1 = JxlDecoderSetInput(decoder, image_data + sizeof(uint32_t) + metadata_size, image_data_size);
+
+    if (res1 == JXL_DEC_ERROR)
+    {
+        printf("JXL_DEC_ERROR1");
+        return 1;
+    }
+
+    JxlBasicInfo basic_info;
+    size_t buffer_size;
+    uint8_t* decoded_data;
+    JxlPixelFormat format;
+    uint8_t channels;
+    JxlDecoderStatus res2 = JxlDecoderSubscribeEvents(decoder, JXL_DEC_BASIC_INFO | JXL_DEC_FULL_IMAGE | JXL_DEC_BASIC_INFO);
+    
+    while (1)
+    {
+        JxlDecoderStatus status = JxlDecoderProcessInput(decoder);
+
+        if (status == JXL_DEC_ERROR)
+        {
+            printf("JXL_DEC_ERROR2");
+            break;
+        }
+
+        if (status == JXL_DEC_SUCCESS) 
+        {
+            break;
+        }
+        
+        if (status == JXL_DEC_FULL_IMAGE) 
+        {
+            break;
+        }
+
+        if (status == JXL_DEC_BASIC_INFO) 
+        {
+            JxlDecoderStatus res3 = JxlDecoderGetBasicInfo(decoder, &basic_info);
+            channels = basic_info.num_color_channels + basic_info.num_extra_channels;
+            format.num_channels = channels; format.data_type = JXL_TYPE_UINT8; 
+            format.endianness = JXL_NATIVE_ENDIAN; format.align = 0;
+        }
+        
+        if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER) 
+        {
+            JxlDecoderStatus res4 = JxlDecoderImageOutBufferSize(decoder, &format, &buffer_size);
+            decoded_data = (uint8_t *)malloc(buffer_size);
+            JxlDecoderStatus res5 = JxlDecoderSetImageOutBuffer(decoder, &format, decoded_data, buffer_size);
+        }
+    }
+
+	/* Save decoded image data */
+	char filename[20];
+    sprintf(filename, "image%d.png", list_index);
+	int write_success = stbi_write_png(filename, basic_info.xsize, basic_info.ysize, channels, decoded_data, channels * basic_info.xsize);
+	if (!write_success)
+	{
+		fprintf(stderr, "Error writing image to %s\n", filename);
+		return SLASH_EINVAL;
+	}
+	else
+	{
+		printf("Image saved as %s\n", filename);
+	}
+	return SLASH_SUCCESS;
 }
 
-slash_command_sub(ippb, get, slash_csp_buffer_get, "[OPTIONS...] <module-idx> <config-file>", "Configure a specific m<item-idx>odule");
+slash_command_sub(ippb, get, slash_csp_buffer_get, "[OPTIONS...] <image-tail-offset>", "Fetch image at index (tail + <image-tail-offset>) from the local ring-buffer at DIPP");
 
 

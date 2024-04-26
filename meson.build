@@ -3,6 +3,7 @@ project('csp_ippc', 'c')
 csp_dep = dependency('csp', fallback : ['csp', 'csp_dep'])
 param_dep = dependency('param', fallback : ['param', 'param_dep'])
 proto_c_dep = dependency('libprotobuf-c', fallback: ['protobuf-c', 'proto_c_dep'])
+jxl_dep = dependency('libjxl', version: '>= 0.7.0')
 
 csp_ippc_src = files([
 	'src/pipeline_config.pb-c.c',
@@ -24,7 +25,7 @@ endif
 csp_ippc_lib = static_library('csp_ippc',
 	sources: [csp_ippc_src],
 	include_directories : csp_ippc_inc,
-	dependencies : [csp_dep, slash_dep, param_dep, proto_c_dep],
+	dependencies : [csp_dep, slash_dep, param_dep, proto_c_dep, jxl_dep],
 	install : false
 )
 
