@@ -367,7 +367,7 @@ int parse_module_yaml_file(const char *filename, ModuleConfig *module_config)
 					// Expect the next event to be the value of name
 					if (!yaml_parser_parse(&parser, &event))
 						break;
-					if (safe_atoi((char *)event.data.scalar.value, &params[param_idx].value_case) < 0)
+					if (safe_atoi((char *)event.data.scalar.value, (int *)&params[param_idx].value_case) < 0)
 					{
 						return -1;
 					}
@@ -569,7 +569,7 @@ static int slash_csp_buffer_get(struct slash *slash)
 	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_TAIL, buffer_tail, node, PARAM_TYPE_UINT32, -1, 0, PM_REMOTE, &_tail, NULL);
 	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_LIST, buffer_list, node, PARAM_TYPE_UINT32, BUFFER_LIST_SIZE, sizeof(uint32_t), PM_REMOTE, &_list, NULL);
 	
-	 /* Add remote parameters to local parameters */
+	/* Add remote parameters to local parameters */
     param_list_add(&buffer_head);
     param_list_add(&buffer_tail);
     param_list_add(&buffer_list);
@@ -594,6 +594,9 @@ static int slash_csp_buffer_get(struct slash *slash)
 		printf("Error: ");
 		return SLASH_EINVAL;
 	}
+
+    printf("head: %d\n", _head);
+    printf("tail: %d\n", _tail);
 
 	/* Fail if offset is too large */
 	int distance = _tail < _head ? _head - _tail : BUFFER_LIST_SIZE - _tail + _head;
@@ -628,7 +631,7 @@ static int slash_csp_buffer_get(struct slash *slash)
 	uint64_t read_address = _list[list_index] + vmem_buffer.vaddr;
 
 	/* Download image file */
-    printf("Download %u bytes from node %u at addr %u\n", read_len, node, read_address);
+    printf("Download %u bytes from node %u at addr %lu\n", read_len, node, read_address);
 	unsigned char *image_data = (unsigned char *)malloc(read_len); // image buffer
 	if (image_data == NULL)
 	{
@@ -658,7 +661,7 @@ static int slash_csp_buffer_get(struct slash *slash)
     uint8_t* decoded_data;
     JxlPixelFormat format;
     uint8_t channels;
-    JxlDecoderStatus res2 = JxlDecoderSubscribeEvents(decoder, JXL_DEC_BASIC_INFO | JXL_DEC_FULL_IMAGE | JXL_DEC_BASIC_INFO);
+    JxlDecoderSubscribeEvents(decoder, JXL_DEC_BASIC_INFO | JXL_DEC_FULL_IMAGE | JXL_DEC_BASIC_INFO);
     
     while (1)
     {
@@ -666,8 +669,8 @@ static int slash_csp_buffer_get(struct slash *slash)
 
         if (status == JXL_DEC_ERROR)
         {
-            printf("JXL_DEC_ERROR2");
-            break;
+            printf("JXL_DEC_ERROR\n");
+            return SLASH_EINVAL;
         }
 
         if (status == JXL_DEC_SUCCESS) 
@@ -682,7 +685,7 @@ static int slash_csp_buffer_get(struct slash *slash)
 
         if (status == JXL_DEC_BASIC_INFO) 
         {
-            JxlDecoderStatus res3 = JxlDecoderGetBasicInfo(decoder, &basic_info);
+            JxlDecoderGetBasicInfo(decoder, &basic_info);
             channels = basic_info.num_color_channels + basic_info.num_extra_channels;
             format.num_channels = channels; format.data_type = JXL_TYPE_UINT8; 
             format.endianness = JXL_NATIVE_ENDIAN; format.align = 0;
@@ -690,9 +693,9 @@ static int slash_csp_buffer_get(struct slash *slash)
         
         if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER) 
         {
-            JxlDecoderStatus res4 = JxlDecoderImageOutBufferSize(decoder, &format, &buffer_size);
+            JxlDecoderImageOutBufferSize(decoder, &format, &buffer_size);
             decoded_data = (uint8_t *)malloc(buffer_size);
-            JxlDecoderStatus res5 = JxlDecoderSetImageOutBuffer(decoder, &format, decoded_data, buffer_size);
+            JxlDecoderSetImageOutBuffer(decoder, &format, decoded_data, buffer_size);
         }
     }
 
