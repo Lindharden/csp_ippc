@@ -586,23 +586,20 @@ static int slash_csp_buffer_get(struct slash *slash)
 	/* Update head and tail */
 	if (param_pull_single(&buffer_head, -1, 1, 0, node, timeout, 2) < 0) 
 	{
-		printf("Error: ");
+		printf("Error: Could not pull remote head parameter\n");
 		return SLASH_EINVAL;
 	}
 	if (param_pull_single(&buffer_tail, -1, 1, 0, node, timeout, 2) < 0) 
 	{
-		printf("Error: ");
+		printf("Error: Could not pull remote tail parameter\n");
 		return SLASH_EINVAL;
 	}
-
-    printf("head: %d\n", _head);
-    printf("tail: %d\n", _tail);
 
 	/* Fail if offset is too large */
 	int distance = _tail < _head ? _head - _tail : BUFFER_LIST_SIZE - _tail + _head;
 	if (distance < tail_offset)
 	{
-		printf("Error: tail offset too large, available range is 0-%d", _head - _tail);
+		printf("Error: tail offset too large, available range is 0-%d\n", _head - _tail);
 		return SLASH_EINVAL;
 	}
 
@@ -612,14 +609,14 @@ static int slash_csp_buffer_get(struct slash *slash)
 	/* Fetch image address from buffer list */
 	if (param_pull_single(&buffer_list, list_index, 1, 0, node, timeout, 2) < 0)
 	{
-		printf("Error: Could not fetch read address from image buffer");
+		printf("Error: Could not fetch read address from image buffer\n");
 		return SLASH_EINVAL;
 	}
 
 	/* Index to read to in buffer list */
 	if (param_pull_single(&buffer_list, list_index + 1, 1, 0, node, timeout, 2) < 0) 
 	{
-		printf("Error: Could not fetch address to read to from image buffer");
+		printf("Error: Could not fetch address to read to from image buffer\n");
 		return SLASH_EINVAL;
 	}
 	
@@ -635,12 +632,12 @@ static int slash_csp_buffer_get(struct slash *slash)
 	unsigned char *image_data = (unsigned char *)malloc(read_len); // image buffer
 	if (image_data == NULL)
 	{
-		printf("Error: Could not allocate memory for image buffer");
+		printf("Error: Could not allocate memory for image buffer\n");
 		return SLASH_EINVAL;
 	}
 	if (vmem_download(node, timeout, read_address, read_len, (char *)image_data, 2, 1) < 0)
 	{
-		printf("Error: Could not download image data");
+		printf("Error: Could not download image data\n");
 		return SLASH_EINVAL;
 	}
 	
@@ -648,13 +645,11 @@ static int slash_csp_buffer_get(struct slash *slash)
 	uint32_t metadata_size = *((uint32_t *)(image_data));
 	uint32_t image_data_size = read_len - sizeof(uint32_t) - metadata_size;
     JxlDecoder* decoder = JxlDecoderCreate(NULL);
-	JxlDecoderStatus res1 = JxlDecoderSetInput(decoder, image_data + sizeof(uint32_t) + metadata_size, image_data_size);
-
-    if (res1 == JXL_DEC_ERROR)
-    {
-        printf("JXL_DEC_ERROR1");
-        return 1;
-    }
+	if (JxlDecoderSetInput(decoder, image_data + sizeof(uint32_t) + metadata_size, image_data_size) == JXL_DEC_ERROR)
+	{
+        printf("Error: Could not decode image\n");
+        return SLASH_EINVAL;
+	}
 
     JxlBasicInfo basic_info;
     size_t buffer_size;
@@ -669,7 +664,7 @@ static int slash_csp_buffer_get(struct slash *slash)
 
         if (status == JXL_DEC_ERROR)
         {
-            printf("JXL_DEC_ERROR\n");
+            printf("Error: Jxl decoder error\n");
             return SLASH_EINVAL;
         }
 
