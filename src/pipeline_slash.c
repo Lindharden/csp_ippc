@@ -14,10 +14,11 @@
 #include <jxl/decode.h>
 #include <brotli/encode.h>
 
-#include "include/csp_pipeline_config/pipeline_config.pb-c.h"
-#include "include/csp_pipeline_config/module_config.pb-c.h"
+#include "pipeline_config.pb-c.h"
+#include "module_config.pb-c.h"
+#include "metadata.pb-c.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "include/csp_pipeline_buffer/stb_image_write.h"
+#include "stb_image_write.h"
 
 #define MAX_MODULES 20
 #define MAX_PIPELINES 6
@@ -556,6 +557,31 @@ static int slash_csp_configure_module(struct slash *slash)
 
 slash_command_sub(ippc, module, slash_csp_configure_module, "[OPTIONS...] <module-idx> <config-file>", "Configure a specific module");
 
+static MetadataItem *get_item(Metadata *data, const char *key) {
+    MetadataItem *found_item = NULL;
+    for (size_t i = 0; i < data->n_items; i++)
+    {
+        if (strcmp(data->items[i]->key, key) == 0)
+        {
+            found_item = data->items[i];
+            break;
+        }
+    }
+    return found_item;
+}
+
+char *get_custom_metadata_string(Metadata *data, char *key)
+{
+    MetadataItem *found_item = get_item(data, key);
+
+    if (found_item == NULL)
+    {
+        return NULL;
+    }
+    
+    return found_item->string_value;
+}
+
 #define PARAMID_BUFFER_LIST 100
 #define PARAMID_BUFFER_HEAD 101
 #define PARAMID_BUFFER_TAIL 102
@@ -569,12 +595,14 @@ static int slash_csp_buffer_get(struct slash *slash)
     unsigned int timeout = slash_dfl_timeout;
 	unsigned int paramver = 2;
 	int ack_with_pull = true;
+	int save_png = false;
 	optparse_t *parser = optparse_new("get", "<tail-offset>");
 	optparse_add_help(parser);
 	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = <env>)");
     optparse_add_unsigned(parser, 't', "timeout", "NUM", 0, &timeout, "timeout (default = <env>)");
     optparse_add_unsigned(parser, 'v', "paramver", "NUM", 0, &paramver, "parameter system version (default = 2)");
 	optparse_add_set(parser, 'a', "no_ack_push", 0, &ack_with_pull, "Disable ack with param push queue");
+	optparse_add_set(parser, 's', "save_png", 1, &save_png, "Save downloaded data as png (default = false)");
 
 	int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
 	if (argi < 0)
@@ -671,72 +699,97 @@ static int slash_csp_buffer_get(struct slash *slash)
 		printf("Error: Could not download image data\n");
 		return SLASH_EINVAL;
 	}
+
+	/* Extract image metadata */
+	size_t offset = 0;
+	uint32_t metadata_size = *((uint32_t *)(image_data)); 
+	offset += sizeof(uint32_t);
+	Metadata *meta = metadata__unpack(NULL, metadata_size, (uint8_t *) image_data + offset); 
+	offset += metadata_size;
+	uint32_t image_data_size = meta->size;
+
+	char *enc = get_custom_metadata_string(meta, "enc");
+	int is_encoded = enc != NULL && !strcmp(enc, "jxl");
 	
-	/* Decode image data using JXL */
-	uint32_t metadata_size = *((uint32_t *)(image_data));
-	uint32_t image_data_size = read_len - sizeof(uint32_t) - metadata_size;
-    JxlDecoder* decoder = JxlDecoderCreate(NULL);
-	if (JxlDecoderSetInput(decoder, image_data + sizeof(uint32_t) + metadata_size, image_data_size) == JXL_DEC_ERROR)
+	int width = meta->width;
+	int height = meta->height;
+	int channels = meta->channels;
+	int stride = width * channels;
+	uint8_t *data = image_data + offset;
+
+	if (is_encoded)
 	{
-        printf("Error: Could not decode image\n");
-        return SLASH_EINVAL;
+		/* Decode image data using JXL */
+		JxlDecoder* decoder = JxlDecoderCreate(NULL);
+		if (JxlDecoderSetInput(decoder, image_data + offset, image_data_size) == JXL_DEC_ERROR)
+		{
+			printf("Error: Could not decode image\n");
+			return SLASH_EINVAL;
+		}
+
+		JxlBasicInfo basic_info;
+		size_t buffer_size;
+		JxlPixelFormat format;
+		uint8_t combined_channels;
+		JxlDecoderSubscribeEvents(decoder, JXL_DEC_BASIC_INFO | JXL_DEC_FULL_IMAGE | JXL_DEC_BASIC_INFO);
+		
+		while (1)
+		{
+			JxlDecoderStatus status = JxlDecoderProcessInput(decoder);
+
+			if (status == JXL_DEC_ERROR)
+			{
+				printf("Error: Jxl decoder error\n");
+				return SLASH_EINVAL;
+			}
+
+			if (status == JXL_DEC_SUCCESS) 
+			{
+				break;
+			}
+			
+			if (status == JXL_DEC_FULL_IMAGE) 
+			{
+				break;
+			}
+
+			if (status == JXL_DEC_BASIC_INFO) 
+			{
+				JxlDecoderGetBasicInfo(decoder, &basic_info);
+				combined_channels = basic_info.num_color_channels + basic_info.num_extra_channels;
+				format.num_channels = combined_channels; format.data_type = JXL_TYPE_UINT8; 
+				format.endianness = JXL_NATIVE_ENDIAN; format.align = 0;
+			}
+			
+			if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER) 
+			{
+				JxlDecoderImageOutBufferSize(decoder, &format, &buffer_size);
+				data = (uint8_t *)malloc(buffer_size);
+				JxlDecoderSetImageOutBuffer(decoder, &format, data, buffer_size);
+			}
+		}
+
+		if (basic_info.xsize != width || basic_info.ysize != height || combined_channels != channels)
+		{
+			printf("Info: Dimensions given by metadata do not match decoded dimensions\n");
+		}
 	}
 
-    JxlBasicInfo basic_info;
-    size_t buffer_size;
-    uint8_t* decoded_data;
-    JxlPixelFormat format;
-    uint8_t channels;
-    JxlDecoderSubscribeEvents(decoder, JXL_DEC_BASIC_INFO | JXL_DEC_FULL_IMAGE | JXL_DEC_BASIC_INFO);
-    
-    while (1)
-    {
-        JxlDecoderStatus status = JxlDecoderProcessInput(decoder);
-
-        if (status == JXL_DEC_ERROR)
-        {
-            printf("Error: Jxl decoder error\n");
-            return SLASH_EINVAL;
-        }
-
-        if (status == JXL_DEC_SUCCESS) 
-        {
-            break;
-        }
-        
-        if (status == JXL_DEC_FULL_IMAGE) 
-        {
-            break;
-        }
-
-        if (status == JXL_DEC_BASIC_INFO) 
-        {
-            JxlDecoderGetBasicInfo(decoder, &basic_info);
-            channels = basic_info.num_color_channels + basic_info.num_extra_channels;
-            format.num_channels = channels; format.data_type = JXL_TYPE_UINT8; 
-            format.endianness = JXL_NATIVE_ENDIAN; format.align = 0;
-        }
-        
-        if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER) 
-        {
-            JxlDecoderImageOutBufferSize(decoder, &format, &buffer_size);
-            decoded_data = (uint8_t *)malloc(buffer_size);
-            JxlDecoderSetImageOutBuffer(decoder, &format, decoded_data, buffer_size);
-        }
-    }
-
-	/* Save decoded image data */
-	char filename[20];
-    sprintf(filename, "image%d.png", list_index);
-	int write_success = stbi_write_png(filename, basic_info.xsize, basic_info.ysize, channels, decoded_data, channels * basic_info.xsize);
-	if (!write_success)
+	if (save_png)
 	{
-		fprintf(stderr, "Error writing image to %s\n", filename);
-		return SLASH_EINVAL;
-	}
-	else
-	{
-		printf("Image saved as %s\n", filename);
+		/* Save decoded image data */
+		char filename[20];
+		sprintf(filename, "image%d.png", list_index);
+		int write_success = stbi_write_png(filename, width, height, channels, data, stride);
+		if (!write_success)
+		{
+			fprintf(stderr, "Error writing image to %s\n", filename);
+			return SLASH_EINVAL;
+		}
+		else
+		{
+			printf("Image saved as %s\n", filename);
+		}
 	}
 	return SLASH_SUCCESS;
 }

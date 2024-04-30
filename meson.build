@@ -7,11 +7,12 @@ jxl_dep = dependency('libjxl', version: '>= 0.7.0')
 brotli_dep = dependency('libbrotlienc')
 
 csp_ippc_src = files([
-	'src/pipeline_config.pb-c.c',
-	'src/module_config.pb-c.c',
+	'src/protobuf/pipeline_config.pb-c.c',
+	'src/protobuf/module_config.pb-c.c',
+	'src/protobuf/metadata.pb-c.c',
 ])
 
-csp_ippc_inc = include_directories('include')
+csp_ippc_inc = include_directories('src/include', 'src/include/protobuf')
 
 slash_dep = []
 if get_option('slash') == true

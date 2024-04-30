@@ -110,6 +110,7 @@ Options:
 - `-t, --timeout [NUM]`: timeout (default = \<env\>).
 - `-v, --paramver`: parameter system version (default = 2).
 - `-a, --no_ack_push`: Disable ack with param push queue (default = true).
+- `-s, --save_png`: Save the downloaded data as a png image (default = false).
 
 Example:
 The below example downloads the second oldest observation stored in the ring buffer on node 150.
