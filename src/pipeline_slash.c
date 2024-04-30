@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <math.h>
 #include <jxl/decode.h>
+#include <brotli/encode.h>
 
 #include "include/csp_pipeline_config/pipeline_config.pb-c.h"
 #include "include/csp_pipeline_config/module_config.pb-c.h"
@@ -283,18 +284,33 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 	}
 
 	// Pack PipelineDefinition
-	size_t len_pipeline = pipeline_definition__get_packed_size(&pipeline);
-	if (len_pipeline + 1 >= DATA_PARAM_SIZE) {
+	size_t packed_size = pipeline_definition__get_packed_size(&pipeline);
+	if (packed_size + 1 >= DATA_PARAM_SIZE) {
 		printf("Packed configuration too large");
 		return SLASH_EINVAL;
 	}
-	uint8_t packed_buf[len_pipeline + 1];
-	pipeline_definition__pack(&pipeline, &packed_buf[1]); // Insert after first index
-	packed_buf[0] = len_pipeline; // Insert data length in first index
+	uint8_t packed_buf[packed_size];
+	pipeline_definition__pack(&pipeline, packed_buf);
+
+	size_t encoded_buffer_size = 1000;
+    uint8_t encoded_buffer[encoded_buffer_size];
+	if (BrotliEncoderCompress(BROTLI_DEFAULT_QUALITY, BROTLI_DEFAULT_WINDOW, BROTLI_DEFAULT_MODE, packed_size, packed_buf, &encoded_buffer_size, encoded_buffer) == BROTLI_FALSE)
+    {
+        fprintf(stderr, "Brotli compression failed\n");
+		return SLASH_EINVAL;
+    }
+	if (encoded_buffer_size + 1 > DATA_PARAM_SIZE)
+	{
+		printf("Packed and encoded configuration is size %ld bytes which exceeds max size of %d\n", encoded_buffer_size + 1, DATA_PARAM_SIZE);
+		return SLASH_EINVAL;
+	}
+	uint8_t buffer[encoded_buffer_size + 1];
+	memcpy(buffer + 1, encoded_buffer, encoded_buffer_size);
+	buffer[0] = encoded_buffer_size;
 
 	// Mirror pipeline_config parameter
 	int param_id = pipeline_id + PIPELINE_PARAMID_OFFSET - 1; // find correct pipeline id (Offset by +10 on pipeline server)
-	PARAM_DEFINE_REMOTE_DYNAMIC(param_id, pipeline_config, node, PARAM_TYPE_DATA, DATA_PARAM_SIZE, 1, PM_CONF, &packed_buf, NULL);
+	PARAM_DEFINE_REMOTE_DYNAMIC(param_id, pipeline_config, node, PARAM_TYPE_DATA, DATA_PARAM_SIZE, 1, PM_CONF, &buffer, NULL);
 
 	// The parameter name must have the id
 	char name[20];
@@ -302,7 +318,7 @@ static int slash_csp_configure_pipeline(struct slash *slash)
 	pipeline_config.name = name;
 
 	// Insert packed pipeline definition into parameter
-	if (param_push_single(&pipeline_config, -1, packed_buf, 0, node, timeout, paramver, ack_with_pull) < 0)
+	if (param_push_single(&pipeline_config, -1, buffer, 0, node, timeout, paramver, ack_with_pull) < 0)
 	{
 		printf("No response\n");
 		return SLASH_EIO;
@@ -495,18 +511,33 @@ static int slash_csp_configure_module(struct slash *slash)
 		return SLASH_EINVAL;
 
 	// Pack PipelineDefinition
-	size_t len_module = module_config__get_packed_size(&module_config);
-	if (len_module + 1 >= DATA_PARAM_SIZE) {
+	size_t packed_size = module_config__get_packed_size(&module_config);
+	if (packed_size + 1 >= DATA_PARAM_SIZE) {
 		printf("Packed configuration too large");
 		return SLASH_EINVAL;
 	}
-	uint8_t packed_buf[len_module + 1];
-	module_config__pack(&module_config, &packed_buf[1]); // Insert after first index
-	packed_buf[0] = len_module; // Insert data length in first index
+	uint8_t packed_buf[packed_size];
+	module_config__pack(&module_config, packed_buf); // Insert after first index
+	
+	size_t encoded_buffer_size = 1000;
+    uint8_t encoded_buffer[encoded_buffer_size];
+	if (BrotliEncoderCompress(BROTLI_DEFAULT_QUALITY, BROTLI_DEFAULT_WINDOW, BROTLI_DEFAULT_MODE, packed_size, packed_buf, &encoded_buffer_size, encoded_buffer) == BROTLI_FALSE)
+    {
+        fprintf(stderr, "Brotli compression failed\n");
+		return SLASH_EINVAL;
+    }
+	if (encoded_buffer_size + 1 > DATA_PARAM_SIZE)
+	{
+		printf("Packed and encoded configuration is size %ld bytes which exceeds max size of %d\n", encoded_buffer_size + 1, DATA_PARAM_SIZE);
+		return SLASH_EINVAL;
+	}
+	uint8_t buffer[encoded_buffer_size + 1];
+	memcpy(buffer + 1, encoded_buffer, encoded_buffer_size);
+	buffer[0] = encoded_buffer_size;
 
 	// Mirror module_param parameter
 	int param_id = module_id + MODULE_PARAMID_OFFSET - 1; // find correct parameter id (Offset by +30 on pipeline server)
-	PARAM_DEFINE_REMOTE_DYNAMIC(param_id, module_param, node, PARAM_TYPE_DATA, DATA_PARAM_SIZE, 1, PM_CONF, &packed_buf, NULL);
+	PARAM_DEFINE_REMOTE_DYNAMIC(param_id, module_param, node, PARAM_TYPE_DATA, DATA_PARAM_SIZE, 1, PM_CONF, &buffer, NULL);
 
 	// The parameter name must have the id
 	char name[20];
@@ -514,7 +545,7 @@ static int slash_csp_configure_module(struct slash *slash)
 	module_param.name = name;
 
 	// Insert packed pipeline definition into parameter
-	if (param_push_single(&module_param, -1, packed_buf, 0, node, timeout, paramver, ack_with_pull) < 0)
+	if (param_push_single(&module_param, -1, buffer, 0, node, timeout, paramver, ack_with_pull) < 0)
 	{
 		printf("No response\n");
 		return SLASH_EIO;
