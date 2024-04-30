@@ -11,6 +11,10 @@ csp_ippc is to be used as a submodule to CSH. After adding the submodule, regist
 csp_ippc_dep = dependency('csp_ippc', fallback: ['csp_ippc', 'csp_ippc_dep'], required: true).as_link_whole() ### add this to csh dependencies ###
 ```
 
+## Dependencies
+
+csp_ippc has a few dependencies namely: libprotobuf-c libjxl libbrotlienc
+
 ## Usage
 
 ### Command 1: `ippc pipeline`
@@ -87,3 +91,31 @@ Example of a valid module configuration file:
   type: 3
   value: 1
 ```
+
+### Command 3: `ippb get`
+
+This command downloads an observation from the ring buffer.
+Specify index of the desired observation (0 = oldest).
+Node should be given by \<env\> using the node command.
+
+Usage:
+
+```
+ippb get [options] <index>
+```
+
+Options:
+
+- `-n, --node [NUM]`: node (default = \<env\>).
+- `-t, --timeout [NUM]`: timeout (default = \<env\>).
+- `-v, --paramver`: parameter system version (default = 2).
+- `-a, --no_ack_push`: Disable ack with param push queue (default = true).
+
+Example:
+The below example downloads the second oldest observation stored in the ring buffer on node 150.
+
+```
+ippb get -n 150 1
+```
+
+If the observation metadata specifies jxl encoding, the data will be decoded.
