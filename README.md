@@ -1,6 +1,6 @@
 # Cubesat Space Protocol - Image Processing Pipeline Configuration (csp_ippc)
 
-Welcome to the csp_ippc repository! This repository contains CLI commands for CSH for configuring and managing the DISCO-2 image processing pipeline.
+Welcome to the csp_ippc repository! This repository contains CLI commands for CSH for configuring and managing the [DISCO-2 image processing pipeline](https://github.com/Lindharden/DIPP).
 
 ## Installation
 
