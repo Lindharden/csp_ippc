@@ -596,13 +596,15 @@ static int slash_csp_buffer_get(struct slash *slash)
 	unsigned int paramver = 2;
 	int ack_with_pull = true;
 	int save_png = false;
-	optparse_t *parser = optparse_new("get", "<tail-offset>");
+	int front = false;
+	optparse_t *parser = optparse_new("get", "<offset>");
 	optparse_add_help(parser);
 	optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "node (default = <env>)");
     optparse_add_unsigned(parser, 't', "timeout", "NUM", 0, &timeout, "timeout (default = <env>)");
     optparse_add_unsigned(parser, 'v', "paramver", "NUM", 0, &paramver, "parameter system version (default = 2)");
 	optparse_add_set(parser, 'a', "no_ack_push", 0, &ack_with_pull, "Disable ack with param push queue");
 	optparse_add_set(parser, 's', "save_png", 1, &save_png, "Save downloaded data as png (default = false)");
+	optparse_add_set(parser, 'f', "front", 1, &front, "Index from front/newest image (default = false)");
 
 	int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
 	if (argi < 0)
@@ -619,7 +621,8 @@ static int slash_csp_buffer_get(struct slash *slash)
 	}
 
 	/* Fetch tail offset parameter */
-	int tail_offset = atoi(slash->argv[argi]);
+	int input_offset = atoi(slash->argv[argi]);
+	if (front) input_offset *= -1;
 
 	uint32_t _head;
 	uint32_t _tail;
@@ -656,14 +659,16 @@ static int slash_csp_buffer_get(struct slash *slash)
 
 	/* Fail if offset is too large */
 	int distance = _tail < _head ? _head - _tail : BUFFER_LIST_SIZE - _tail + _head;
-	if (distance < tail_offset)
+	if (distance < abs(input_offset))
 	{
 		printf("Error: tail offset too large, available range is 0-%d\n", _head - _tail);
 		return SLASH_EINVAL;
 	}
 
-	/* Calculate index in buffer list to read from */
-	uint32_t list_index = (_tail + tail_offset) % BUFFER_LIST_SIZE;
+	/* Calculate index in buffer list to read from - supports negative index to get newest */
+	uint32_t list_index = input_offset < 0 
+		? (_head + input_offset + BUFFER_LIST_SIZE) % BUFFER_LIST_SIZE 
+		: (_tail + input_offset) % BUFFER_LIST_SIZE;
 
 	/* Fetch image address from buffer list */
 	if (param_pull_single(&buffer_list, list_index, 1, 0, node, timeout, 2) < 0)
@@ -682,23 +687,47 @@ static int slash_csp_buffer_get(struct slash *slash)
 	/* Fetch read address and data size */
 	uint32_t read_from = _list[list_index];
 	uint32_t read_to = _list[list_index + 1];
-	if (read_to < read_from) read_from = 0; // wraparound
-	uint32_t read_len = read_to - read_from;
-	uint64_t read_address = _list[list_index] + vmem_buffer.vaddr;
+	int wraparound = read_to < read_from; // wraparound
+	uint32_t read_len = wraparound ? BUFFER_VMEM_SIZE - read_from + read_to : read_to - read_from;
 
 	/* Download image file */
-    printf("Download %u bytes from node %u at addr %lu\n", read_len, node, read_address);
+    printf("Download %u bytes from node %u at addr %lu\n", read_len, node, vmem_buffer.vaddr + read_from);
 	unsigned char *image_data = (unsigned char *)malloc(read_len); // image buffer
 	if (image_data == NULL)
 	{
 		printf("Error: Could not allocate memory for image buffer\n");
 		return SLASH_EINVAL;
 	}
-	if (vmem_download(node, timeout, read_address, read_len, (char *)image_data, 2, 1) < 0)
+
+	/* If image is split due to wraparound, perform two downloads */
+	if (wraparound)
 	{
-		printf("Error: Could not download image data\n");
-		return SLASH_EINVAL;
+		/* Download first part of image from end of VMEM file */
+		uint32_t len_fst = BUFFER_VMEM_SIZE - read_from;
+		if (vmem_download(node, timeout, vmem_buffer.vaddr + read_from, len_fst, (char *)image_data, 2, 1) < 0)
+		{
+			printf("Error: Could not download image data\n");
+			return SLASH_EINVAL;
+		}
+		
+		/* Download remainder of the image from the beginning of the file */
+		uint32_t len_snd = read_to;
+		if (vmem_download(node, timeout, vmem_buffer.vaddr, len_snd, (char *)image_data + len_fst, 2, 1) < 0)
+		{
+			printf("Error: Could not download image data\n");
+			return SLASH_EINVAL;
+		}
 	}
+	else 
+	{	
+		/* Normal image download */
+		if (vmem_download(node, timeout, vmem_buffer.vaddr + read_from, read_len, (char *)image_data, 2, 1) < 0)
+		{
+			printf("Error: Could not download image data\n");
+			return SLASH_EINVAL;
+		}
+	}
+	
 
 	/* Extract image metadata */
 	size_t offset = 0;
@@ -710,7 +739,7 @@ static int slash_csp_buffer_get(struct slash *slash)
 
 	char *enc = get_custom_metadata_string(meta, "enc");
 	int is_encoded = enc != NULL && !strcmp(enc, "jxl");
-	
+	printf("Encoded: %d\n", is_encoded);
 	int width = meta->width;
 	int height = meta->height;
 	int channels = meta->channels;
@@ -794,6 +823,6 @@ static int slash_csp_buffer_get(struct slash *slash)
 	return SLASH_SUCCESS;
 }
 
-slash_command_sub(ippb, get, slash_csp_buffer_get, "[OPTIONS...] <image-tail-offset>", "Fetch image at index (tail + <image-tail-offset>) from the local ring-buffer at DIPP");
+slash_command_sub(ippb, get, slash_csp_buffer_get, "[OPTIONS...] <offset>", "Fetch image at <offset> from the DISCO-2 ring-buffer (0 = oldest, -1 = newest)");
 
 
