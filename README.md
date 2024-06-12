@@ -48,10 +48,11 @@ Example of a valid pipeline configuration file:
 ```yaml
 - order: 1
   param_id: 1
-  name: flip_horizontally
+  name: demosaic
+
 - order: 2
   param_id: 2
-  name: bw_convert
+  name: encode
 ```
 
 ### Command 2: `ippc module`
@@ -83,11 +84,15 @@ ippc module -n 162 2 "module_config.yaml"
 Example of a valid module configuration file:
 
 ```yaml
-- key: "flip_percent"
+- key: "distance"
   type: 4
   value: 0.50
 
-- key: "flip_amount"
+- key: "effort"
+  type: 3
+  value: 7
+
+- key: "resampling"
   type: 3
   value: 1
 ```
