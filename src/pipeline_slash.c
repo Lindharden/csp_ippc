@@ -582,13 +582,6 @@ char *get_custom_metadata_string(Metadata *data, char *key)
     return found_item->string_value;
 }
 
-#define PARAMID_BUFFER_LIST 100
-#define PARAMID_BUFFER_HEAD 101
-#define PARAMID_BUFFER_TAIL 102
-#define VMEM_NAME "buffer.vmem"
-#define BUFFER_LIST_SIZE 10
-#define BUFFER_VMEM_SIZE 1000000
-
 static int slash_csp_buffer_get(struct slash *slash)
 {
 	unsigned int node = slash_dfl_node; // fetch current node id
@@ -624,111 +617,11 @@ static int slash_csp_buffer_get(struct slash *slash)
 	int input_offset = atoi(slash->argv[argi]);
 	if (front) input_offset *= -1;
 
-	uint32_t _head;
-	uint32_t _tail;
-	uint32_t _list[BUFFER_LIST_SIZE];
-	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_HEAD, buffer_head, node, PARAM_TYPE_UINT32, -1, 0, PM_REMOTE, &_head, NULL);
-	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_TAIL, buffer_tail, node, PARAM_TYPE_UINT32, -1, 0, PM_REMOTE, &_tail, NULL);
-	PARAM_DEFINE_REMOTE_DYNAMIC(PARAMID_BUFFER_LIST, buffer_list, node, PARAM_TYPE_UINT32, BUFFER_LIST_SIZE, sizeof(uint32_t), PM_REMOTE, &_list, NULL);
-	
-	/* Add remote parameters to local parameters */
-    param_list_add(&buffer_head);
-    param_list_add(&buffer_tail);
-    param_list_add(&buffer_list);
-
-	vmem_list2_t vmem_buffer = {0};
-
-	if (vmem_client_find(node, timeout, &vmem_buffer, 2, VMEM_NAME, 5) < 0)
-	{   
-		// error when locating the vmem file
-		printf("Error: Could not locate VMEM file with name %s\n", VMEM_NAME);
-		return SLASH_EINVAL;
-	}
-
-	/* Update head and tail */
-	if (param_pull_single(&buffer_head, -1, 1, 0, node, timeout, 2) < 0) 
-	{
-		printf("Error: Could not pull remote head parameter\n");
-		return SLASH_EINVAL;
-	}
-	if (param_pull_single(&buffer_tail, -1, 1, 0, node, timeout, 2) < 0) 
-	{
-		printf("Error: Could not pull remote tail parameter\n");
-		return SLASH_EINVAL;
-	}
-
-	/* Fail if offset is too large */
-	int distance = _tail < _head ? _head - _tail : BUFFER_LIST_SIZE - _tail + _head;
-	if (distance < abs(input_offset))
-	{
-		printf("Error: tail offset too large, available range is 0-%d\n", _head - _tail);
-		return SLASH_EINVAL;
-	}
-
-	/* Calculate index in buffer list to read from - supports negative index to get newest */
-	uint32_t list_index = input_offset < 0 
-		? (_head + input_offset + BUFFER_LIST_SIZE) % BUFFER_LIST_SIZE 
-		: (_tail + input_offset) % BUFFER_LIST_SIZE;
-
-	/* Fetch image address from buffer list */
-	if (param_pull_single(&buffer_list, list_index, 1, 0, node, timeout, 2) < 0)
-	{
-		printf("Error: Could not fetch read address from image buffer\n");
-		return SLASH_EINVAL;
-	}
-
-	/* Index to read to in buffer list */
-	if (param_pull_single(&buffer_list, list_index + 1, 1, 0, node, timeout, 2) < 0) 
-	{
-		printf("Error: Could not fetch address to read to from image buffer\n");
-		return SLASH_EINVAL;
-	}
-	
-	/* Fetch read address and data size */
-	uint32_t read_from = _list[list_index];
-	uint32_t read_to = _list[list_index + 1];
-	int wraparound = read_to < read_from; // wraparound
-	uint32_t read_len = wraparound ? BUFFER_VMEM_SIZE - read_from + read_to : read_to - read_from;
-
 	/* Download image file */
-    printf("Download %u bytes from node %u at addr %lu\n", read_len, node, vmem_buffer.vaddr + read_from);
-	unsigned char *image_data = (unsigned char *)malloc(read_len); // image buffer
-	if (image_data == NULL)
-	{
-		printf("Error: Could not allocate memory for image buffer\n");
-		return SLASH_EINVAL;
-	}
-
-	/* If image is split due to wraparound, perform two downloads */
-	if (wraparound)
-	{
-		/* Download first part of image from end of VMEM file */
-		uint32_t len_fst = BUFFER_VMEM_SIZE - read_from;
-		if (vmem_download(node, timeout, vmem_buffer.vaddr + read_from, len_fst, (char *)image_data, 2, 1) < 0)
-		{
-			printf("Error: Could not download image data\n");
-			return SLASH_EINVAL;
-		}
-		
-		/* Download remainder of the image from the beginning of the file */
-		uint32_t len_snd = read_to;
-		if (vmem_download(node, timeout, vmem_buffer.vaddr, len_snd, (char *)image_data + len_fst, 2, 1) < 0)
-		{
-			printf("Error: Could not download image data\n");
-			return SLASH_EINVAL;
-		}
-	}
-	else 
-	{	
-		/* Normal image download */
-		if (vmem_download(node, timeout, vmem_buffer.vaddr + read_from, read_len, (char *)image_data, 2, 1) < 0)
-		{
-			printf("Error: Could not download image data\n");
-			return SLASH_EINVAL;
-		}
-	}
+	unsigned char *image_data = (unsigned char *)malloc(10000000); // image buffer
+	int size_down = vmem_ring_download(node, timeout, "images", input_offset, (char *)image_data, 2, 1);
+	printf("Downloaded %d bytes from node %d in ring buffer '%s' at offset %d\n", size_down, node, "images", input_offset);
 	
-
 	/* Extract image metadata */
 	size_t offset = 0;
 	uint32_t metadata_size = *((uint32_t *)(image_data)); 
@@ -808,7 +701,7 @@ static int slash_csp_buffer_get(struct slash *slash)
 	{
 		/* Save decoded image data */
 		char filename[20];
-		sprintf(filename, "image%d.png", list_index);
+		sprintf(filename, "image_%s.png", meta->camera);
 		int write_success = stbi_write_png(filename, width, height, channels, data, stride);
 		if (!write_success)
 		{
