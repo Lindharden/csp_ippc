@@ -620,6 +620,10 @@ static int slash_csp_buffer_get(struct slash *slash)
 	/* Download image file */
 	unsigned char *image_data = (unsigned char *)malloc(10000000); // image buffer
 	int size_down = vmem_ring_download(node, timeout, "images", input_offset, (char *)image_data, 2, 1);
+	if (size_down == -1) {
+		printf("Download failed\n");
+		return SLASH_EINVAL;
+	}
 	printf("Downloaded %d bytes from node %d in ring buffer '%s' at offset %d\n", size_down, node, "images", input_offset);
 	
 	/* Extract image metadata */
